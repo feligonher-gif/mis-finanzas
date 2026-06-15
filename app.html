@@ -950,7 +950,9 @@ function Simulador() {
   const [price,setPrice] = useState('')
   const [inst,setInst] = useState('1')
   const [rate,setRate] = useState('0')
+  const [desc,setDescS] = useState('')
   const [done,setDone] = useState(false)
+  const projRef=useRef(null),projC=useRef(null)
   const cm=curMonth()
   const mi=useMemo(()=>state.incomes.filter(i=>inMonth(i.date,cm)).reduce((s,i)=>s+i.amount,0),[state.incomes])
   const me=useMemo(()=>state.expenses.filter(e=>inMonth(e.date,cm)).reduce((s,e)=>s+e.amount,0),[state.expenses])
@@ -960,10 +962,64 @@ function Simulador() {
   const p=parseFloat(price)||0,n=parseInt(inst)||1,r=parseFloat(rate)||0
   const mr=r/100/12
   const mp=n===1?p:mr===0?p/n:p*(mr*Math.pow(1+mr,n))/(Math.pow(1+mr,n)-1)
+  const totalPagar=n===1?p:mp*n
+  const intereses=totalPagar-p
   const newAvail=avail-mp
   const impPct=mi>0?Math.round(mp/mi*100):0
   const verdict=!done||!p?null:newAvail<0?'bad':impPct>30||newAvail<mi*.1?'warn':'ok'
-  const VD={ok:{e:'✅',t:'¡Sí puedes comprarlo!',d:'Esta compra es manejable con tus finanzas actuales.'},warn:{e:'⚠️',t:'Con precaución',d:'Puedes comprarlo pero comprometerá un porcentaje alto de tus ingresos.'},bad:{e:'❌',t:'No es recomendable',d:'Esta compra superaría tu capacidad de pago mensual.'}}
+  const VD={ok:{e:'✅',t:'¡Sí puedes comprarlo!',d:'Esta compra es manejable con tus finanzas actuales.',c:'var(--g)'},warn:{e:'⚠️',t:'Con precaución',d:'Puedes comprarlo pero comprometerá un porcentaje alto de tus ingresos.',c:'var(--o)'},bad:{e:'❌',t:'No es recomendable',d:'Esta compra superaría tu capacidad de pago mensual.',c:'var(--r)'}}
+
+  // Proyección 6 meses
+  const proj=useMemo(()=>{
+    if(!done||!p) return []
+    const meses=Math.max(n,6)
+    return Array.from({length:meses},(_,i)=>{
+      const sinCompra=avail
+      const conCompra=i<n?avail-mp:avail
+      return {mes:i,sinCompra,conCompra,cuota:i<n?mp:0}
+    })
+  },[done,p,n,mp,avail])
+
+  useEffect(()=>{
+    if(!projRef.current||!proj.length)return
+    projC.current?.destroy()
+    const tc=getComputedStyle(document.documentElement).getPropertyValue('--t3').trim()
+    const labels=proj.map((_,i)=>{const d=new Date();d.setMonth(d.getMonth()+i);return d.toLocaleDateString('es-CL',{month:'short'})})
+    projC.current=new Chart(projRef.current,{type:'bar',
+      data:{labels,datasets:[
+        {label:'Sin compra',data:proj.map(m=>m.sinCompra),backgroundColor:'#34C75966',borderColor:'#34C759',borderWidth:2,borderRadius:4},
+        {label:'Con compra',data:proj.map(m=>m.conCompra),backgroundColor:'#FF3B3066',borderColor:'#FF3B30',borderWidth:2,borderRadius:4}
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:10},color:tc,boxWidth:10}}},
+        scales:{x:{grid:{display:false},ticks:{color:tc,font:{size:10}}},y:{grid:{color:'rgba(128,128,128,.1)'},ticks:{color:tc,font:{size:10},callback:v=>`$${Number(v).toLocaleString('es-CL')}`}}}}
+    })
+    return()=>projC.current?.destroy()
+  },[proj])
+
+  // Análisis cualitativo
+  const analisis=useMemo(()=>{
+    if(!done||!p) return []
+    const items=[]
+    if(impPct<=10) items.push({ic:'✅',t:'Impacto bajo',d:`La cuota representa solo el ${impPct}% de tus ingresos. Muy manejable.`,c:'var(--g)'})
+    else if(impPct<=20) items.push({ic:'🟡',t:'Impacto moderado',d:`La cuota es el ${impPct}% de tus ingresos. Revisa si puedes reducir otros gastos.`,c:'var(--o)'})
+    else if(impPct<=30) items.push({ic:'🟠',t:'Impacto significativo',d:`La cuota consume el ${impPct}% de tus ingresos. Tendrás poco margen de maniobra.`,c:'var(--o)'})
+    else items.push({ic:'🔴',t:'Impacto alto',d:`La cuota consume el ${impPct}% de tus ingresos. Muy riesgoso para tu estabilidad.`,c:'var(--r)'})
+
+    if(newAvail<0) items.push({ic:'❌',t:'Saldo negativo',d:`Quedarías con ${clp(Math.abs(newAvail))} de déficit mensual. No podrías cubrir todos tus gastos.`,c:'var(--r)'})
+    else if(newAvail<mi*0.1) items.push({ic:'⚠️',t:'Sin colchón financiero',d:`Solo te quedarían ${clp(newAvail)} libres al mes (${pct(newAvail,mi)}%). Sin margen para imprevistos.`,c:'var(--o)'})
+    else items.push({ic:'💚',t:'Saldo libre suficiente',d:`Te quedarían ${clp(newAvail)} disponibles cada mes para imprevistos y ahorro.`,c:'var(--g)'})
+
+    if(n>1&&intereses>0) items.push({ic:'💸',t:`Costo total del crédito`,d:`Pagarás ${clp(intereses)} extra en intereses. El precio real del producto es ${clp(totalPagar)}.`,c:'var(--o)'})
+
+    const mesesPagoFull=avail>0?Math.ceil(p/avail):999
+    if(n>1&&mesesPagoFull<=n+3) items.push({ic:'💡',t:'Alternativa: ahorro previo',d:`Ahorrando tu disponible actual, podrías comprarlo al contado en ~${mesesPagoFull} meses y ahorrar ${clp(intereses)} en intereses.`,c:'var(--a)'})
+
+    const mesesNeg=proj.filter(m=>m.conCompra<0).length
+    if(mesesNeg>0) items.push({ic:'📉',t:`${mesesNeg} mes${mesesNeg>1?'es':''} en rojo`,d:`Durante ${mesesNeg} de los próximos ${n} meses tendrías saldo negativo.`,c:'var(--r)'})
+
+    return items
+  },[done,p,n,mp,mi,avail,newAvail,impPct,intereses,totalPagar,proj])
+
   return html`
     <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
       <div class="hdr">
@@ -974,41 +1030,73 @@ function Simulador() {
       <div class="page">
         <div class="card">
           <div class="slabel" style="margin-top:0">Tu situación actual</div>
-          ${[['Ingresos del mes',clp(mi),'var(--g)'],['Gastos y compromisos',clp(me+mn+md),'var(--r)']].map(([l,v,c])=>html`<div class="srow"><span style="color:var(--t3)">${l}</span><span style="font-weight:700;color:${c}">${v}</span></div>`)}
-          <div class="srow"><b>Disponible actual</b><b style="font-size:18px;color:${avail>=0?'var(--g)':'var(--r)'}">${clp(avail)}</b></div>
+          ${[['💰 Ingresos del mes',clp(mi),'var(--g)'],['💸 Gastos y compromisos',clp(me+mn+md),'var(--r)']].map(([l,v,c])=>html`<div class="srow"><span style="color:var(--t3)">${l}</span><span style="font-weight:700;color:${c}">${v}</span></div>`)}
+          <div style="border-top:1px solid var(--sep);margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:center">
+            <b>💵 Disponible mensual</b>
+            <b style="font-size:20px;color:${avail>=0?'var(--g)':'var(--r)'}">${clp(avail)}</b>
+          </div>
         </div>
+
         <div class="card" style="margin-top:12px">
           <div class="slabel" style="margin-top:0">Simular compra</div>
-          <div class="fg"><label class="fl">Precio del producto</label>
+          <div class="fg"><label class="fl">¿Qué quieres comprar?</label>
+            <input class="inp" placeholder="Ej: TV, Auto, Notebook..." value=${desc} onInput=${e=>{setDescS(e.target.value);setDone(false)}}/>
+          </div>
+          <div class="fg"><label class="fl">Precio</label>
             <div class="awrap"><span class="apfx">$</span><input class="inp ainp" type="number" inputmode="numeric" placeholder="0" value=${price} onInput=${e=>{setPrice(e.target.value);setDone(false)}}/></div>
           </div>
           <div class="row2">
             <div class="fg"><label class="fl">N° cuotas</label>
               <select class="inp" value=${inst} onChange=${e=>{setInst(e.target.value);setDone(false)}}>
-                ${[1,2,3,6,9,12,18,24,36,48].map(n=>html`<option value=${n}>${n===1?'Al contado':`${n} cuotas`}</option>`)}
+                ${[1,2,3,6,9,12,18,24,36,48].map(v=>html`<option value=${v}>${v===1?'Al contado':`${v} cuotas`}</option>`)}
               </select>
             </div>
-            <div class="fg"><label class="fl">Tasa anual %</label><input class="inp" type="number" inputmode="decimal" placeholder="0.0" value=${rate} onInput=${e=>{setRate(e.target.value);setDone(false)}}/></div>
+            <div class="fg"><label class="fl">Tasa anual %</label>
+              <input class="inp" type="number" inputmode="decimal" placeholder="0.0" value=${rate} onInput=${e=>{setRate(e.target.value);setDone(false)}}/>
+            </div>
           </div>
           ${p>0&&n>1?html`
             <div style="background:var(--s2);border-radius:var(--r12);padding:12px;margin-bottom:12px">
-              <div style="display:flex;justify-content:space-between"><span style="font-size:13px;color:var(--t3)">Cuota mensual estimada</span><b style="color:var(--a)">${clp(mp)}</b></div>
-              ${r>0?html`<div style="display:flex;justify-content:space-between;margin-top:4px"><span style="font-size:12px;color:var(--t3)">Total con intereses</span><span style="font-weight:600">${clp(mp*n)}</span></div>`:''}
+              <div class="srow"><span style="font-size:13px;color:var(--t3)">Cuota mensual</span><b style="color:var(--a)">${clp(mp)}</b></div>
+              <div class="srow"><span style="font-size:13px;color:var(--t3)">Total a pagar</span><b>${clp(totalPagar)}</b></div>
+              ${intereses>0?html`<div class="srow"><span style="font-size:13px;color:var(--t3)">Intereses totales</span><b style="color:var(--r)">${clp(intereses)}</b></div>`:''}
             </div>`:''}
           <button class="btn bp bfull" disabled=${!p} onClick=${()=>setDone(true)}>🔍 Analizar compra</button>
         </div>
+
         ${verdict&&html`
-          <div class="simr ${verdict}" style="margin-top:12px">
-            <div style="font-size:22px;font-weight:800;color:${verdict==='ok'?'var(--g)':verdict==='warn'?'var(--o)':'var(--r)'}">${VD[verdict].e} ${VD[verdict].t}</div>
-            <div style="font-size:14px;margin-top:4px">${VD[verdict].d}</div>
+          <div style="margin-top:12px;padding:16px;background:${VD[verdict].c}18;border:2px solid ${VD[verdict].c};border-radius:var(--r16)">
+            <div style="font-size:24px;font-weight:800;color:${VD[verdict].c}">${VD[verdict].e} ${VD[verdict].t}</div>
+            <div style="font-size:14px;margin-top:4px;color:var(--t2)">${VD[verdict].d}</div>
           </div>
+
           <div class="card" style="margin-top:12px">
-            <div class="slabel" style="margin-top:0">Impacto en tu presupuesto</div>
-            ${[['Cuota mensual',clp(mp),'var(--o)'],['% de ingresos',impPct+'%',impPct>30?'var(--r)':impPct>15?'var(--o)':'var(--g)']].map(([l,v,c])=>html`<div class="srow"><span style="color:var(--t3)">${l}</span><span style="font-weight:700;color:${c}">${v}</span></div>`)}
-            <div class="srow"><b>Disponible después</b><b style="font-size:18px;color:${newAvail>=0?'var(--g)':'var(--r)'}">${clp(newAvail)}</b></div>
-            <div class="pwrap" style="margin-top:8px"><div class="pbar" style="width:${Math.min(100,impPct)}%;background:${impPct>30?'var(--r)':impPct>15?'var(--o)':'var(--g)'}"></div></div>
-            <div style="font-size:12px;color:var(--t3);margin-top:4px">Esta cuota representa el ${impPct}% de tus ingresos</div>
-          </div>`}
+            <div class="slabel" style="margin-top:0">📊 Impacto mensual</div>
+            ${[
+              ['Cuota mensual',clp(mp),impPct>30?'var(--r)':impPct>15?'var(--o)':'var(--g)'],
+              ['% de ingresos',impPct+'%',impPct>30?'var(--r)':impPct>15?'var(--o)':'var(--g)'],
+              ['Disponible después',clp(newAvail),newAvail>=0?'var(--g)':'var(--r)'],
+            ].map(([l,v,c])=>html`<div class="srow"><span style="color:var(--t3)">${l}</span><b style="color:${c}">${v}</b></div>`)}
+            <div class="pwrap" style="margin-top:10px">
+              <div class="pbar" style="width:${Math.min(100,impPct)}%;background:${impPct>30?'var(--r)':impPct>15?'var(--o)':'var(--g)'}"></div>
+            </div>
+            <div style="font-size:11px;color:var(--t3);margin-top:4px">Uso del ingreso: ${impPct}% para esta cuota</div>
+          </div>
+
+          <div class="card" style="margin-top:12px">
+            <div class="slabel" style="margin-top:0">📈 Proyección ${Math.max(n,6)} meses</div>
+            <div style="height:200px"><canvas ref=${projRef}></canvas></div>
+          </div>
+
+          <div class="slabel">🧠 Análisis detallado</div>
+          ${analisis.map(a=>html`
+            <div class="card" style="margin-bottom:10px;border-left:4px solid ${a.c}">
+              <div style="display:flex;gap:10px;align-items:flex-start">
+                <span style="font-size:20px;line-height:1.2">${a.ic}</span>
+                <div><b style="color:${a.c}">${a.t}</b><div style="font-size:13px;color:var(--t2);margin-top:3px">${a.d}</div></div>
+              </div>
+            </div>`)}
+        `}
       </div>
     </div>`
 }
@@ -1086,63 +1174,144 @@ function Calendario() {
   const {state,dispatch} = useApp()
   const today=new Date()
   const [vd,setVd] = useState(new Date(today.getFullYear(),today.getMonth(),1))
+  const [notifPerm,setNotifPerm] = useState(typeof Notification!=='undefined'?Notification.permission:'denied')
+  const [selDay,setSelDay] = useState(null)
   const y=vd.getFullYear(),mo=vd.getMonth()
   const fd=new Date(y,mo,1).getDay(),dim=new Date(y,mo+1,0).getDate()
   const DAYS=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb']
   const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
-  const events=useMemo(()=>{
+
+  async function pedirNotif(){
+    if(typeof Notification==='undefined')return
+    const p=await Notification.requestPermission()
+    setNotifPerm(p)
+    if(p==='granted') dispararNotifHoy()
+  }
+
+  function dispararNotifHoy(){
+    const t=new Date(),ty=t.getFullYear(),tm=t.getMonth(),td=t.getDate()
+    const evHoy=allEvents.filter(e=>new Date(e.rawDate).getFullYear()===ty&&new Date(e.rawDate).getMonth()===tm&&new Date(e.rawDate).getDate()===td)
+    evHoy.forEach(e=>{
+      new Notification('📅 Mis Finanzas — Recordatorio',{
+        body:`${e.label}: ${e.amount>0?(e.type==='ingreso'?'+ ':'- ')+clp(e.amount):'Hoy'}`,
+        icon:'/lib/icon.png'
+      })
+    })
+  }
+
+  const allEvents=useMemo(()=>{
     const evs=[]
-    state.debts.forEach(d=>{const dd=new Date(d.nextPaymentDate);if(dd.getFullYear()===y&&dd.getMonth()===mo)evs.push({day:dd.getDate(),label:d.name,amount:d.monthlyPayment,type:'deuda'})})
-    state.installments.filter(i=>i.paidInstallments<i.numInstallments).forEach(i=>{const st=new Date(i.startDate),diff=(y-st.getFullYear())*12+(mo-st.getMonth());if(diff>=0&&diff<i.numInstallments)evs.push({day:st.getDate(),label:i.productName,amount:i.monthlyAmount,type:'cuota'})})
+    // Ingresos fijos (recurrentes)
+    state.incomes.filter(i=>i.type==='fijo'||i.recurrent).forEach(i=>{
+      const d=new Date(i.date),day=d.getDate()
+      const rawDate=new Date(y,mo,day)
+      evs.push({day,label:i.description||i.category,amount:i.amount,type:'ingreso',rawDate})
+    })
+    // Gastos fijos
+    state.expenses.filter(e=>e.type==='fijo').forEach(e=>{
+      const d=new Date(e.date),day=d.getDate()
+      const rawDate=new Date(y,mo,day)
+      evs.push({day,label:e.description||ELABELS[e.category]||e.category,amount:e.amount,type:'gasto',rawDate})
+    })
+    // Deudas
+    state.debts.forEach(d=>{
+      const dd=new Date(d.nextPaymentDate)
+      if(dd.getFullYear()===y&&dd.getMonth()===mo)
+        evs.push({day:dd.getDate(),label:d.name,amount:d.monthlyPayment,type:'deuda',rawDate:dd})
+    })
+    // Cuotas
+    state.installments.filter(i=>i.paidInstallments<i.numInstallments).forEach(i=>{
+      const st=new Date(i.startDate),diff=(y-st.getFullYear())*12+(mo-st.getMonth())
+      if(diff>=0&&diff<i.numInstallments){
+        const rawDate=new Date(y,mo,st.getDate())
+        evs.push({day:st.getDate(),label:i.productName,amount:i.monthlyAmount,type:'cuota',rawDate})
+      }
+    })
     return evs
-  },[state.debts,state.installments,y,mo])
-  const byDay=useMemo(()=>{const m={};events.forEach(e=>{if(!m[e.day])m[e.day]=[];m[e.day].push(e)});return m},[events])
-  const upcoming=events.filter(e=>new Date(y,mo,e.day)>=today).sort((a,b)=>a.day-b.day)
-  const TC={deuda:'var(--r)',cuota:'var(--o)'}
+  },[state.debts,state.installments,state.incomes,state.expenses,y,mo])
+
+  const byDay=useMemo(()=>{const m={};allEvents.forEach(e=>{if(!m[e.day])m[e.day]=[];m[e.day].push(e)});return m},[allEvents])
+  const upcoming=allEvents.filter(e=>e.rawDate>=today).sort((a,b)=>a.day-b.day)
+  const selEvs=selDay?byDay[selDay]||[]:null
+  const TC={ingreso:'var(--g)',gasto:'var(--r)',deuda:'var(--r)',cuota:'var(--o)'}
+  const TIC={ingreso:'💰',gasto:'💸',deuda:'💳',cuota:'📦'}
+
   return html`
     <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
       <div class="hdr">
         <button class="back" onClick=${()=>dispatch({type:'SUB',p:null})}>‹ Volver</button>
         <div style="flex:1;text-align:center"><div class="htitle" style="font-size:22px">📅 Calendario</div></div>
-        <div style="width:60px"></div>
+        <button class="btn bsm" style="background:${notifPerm==='granted'?'var(--gl)':'var(--al)'};color:${notifPerm==='granted'?'var(--g)':'var(--a)'}" onClick=${pedirNotif}>
+          ${notifPerm==='granted'?'🔔':'🔕'}
+        </button>
       </div>
       <div class="page">
+        ${notifPerm!=='granted'&&html`
+          <div class="card" style="margin-bottom:12px;background:var(--al);border:1px solid var(--a)">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:24px">🔔</span>
+              <div style="flex:1"><b style="color:var(--a)">Activar notificaciones</b><div style="font-size:13px;color:var(--t2);margin-top:2px">Recibe alertas el día de cada pago o ingreso</div></div>
+              <button class="btn bp bsm" onClick=${pedirNotif}>Activar</button>
+            </div>
+          </div>`}
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <button class="btn bs bsm" onClick=${()=>setVd(new Date(y,mo-1,1))}>‹</button>
+          <button class="btn bs bsm" onClick=${()=>{setVd(new Date(y,mo-1,1));setSelDay(null)}}>‹</button>
           <b style="font-size:17px;text-transform:capitalize">${MONTHS[mo]} ${y}</b>
-          <button class="btn bs bsm" onClick=${()=>setVd(new Date(y,mo+1,1))}>›</button>
+          <button class="btn bs bsm" onClick=${()=>{setVd(new Date(y,mo+1,1));setSelDay(null)}}>›</button>
         </div>
         <div class="card">
           <div class="cgrid" style="margin-bottom:6px">${DAYS.map(d=>html`<div class="cdh">${d}</div>`)}</div>
           <div class="cgrid">
             ${Array.from({length:fd},(_,i)=>html`<div key=${`e${i}`}></div>`)}
             ${Array.from({length:dim},(_,i)=>{
-              const day=i+1,isToday=day===today.getDate()&&mo===today.getMonth()&&y===today.getFullYear(),evs=byDay[day]
+              const day=i+1,isToday=day===today.getDate()&&mo===today.getMonth()&&y===today.getFullYear()
+              const isSel=day===selDay,evs=byDay[day]
               return html`
-                <div class="cd ${isToday?'today':''}" style="position:relative">
+                <div class="cd ${isToday?'today':''}" style="position:relative;cursor:${evs?'pointer':'default'};outline:${isSel?'2px solid var(--a)':'none'};border-radius:8px" onClick=${()=>setSelDay(evs?day:null)}>
                   <span>${day}</span>
-                  ${evs&&html`<div style="display:flex;gap:2px;margin-top:2px;justify-content:center">
-                    ${evs.slice(0,2).map(e=>html`<div style="width:5px;height:5px;border-radius:50%;background:${isToday?'#fff':TC[e.type]}"></div>`)}
+                  ${evs&&html`<div style="display:flex;gap:2px;margin-top:2px;justify-content:center;flex-wrap:wrap">
+                    ${evs.slice(0,3).map(e=>html`<div style="width:5px;height:5px;border-radius:50%;background:${isToday?'#fff':TC[e.type]}"></div>`)}
                   </div>`}
                 </div>`})}
           </div>
         </div>
+
+        ${selEvs&&html`
+          <div class="card" style="margin-top:12px;border:2px solid var(--a)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <b>${selDay} de ${MONTHS[mo]}</b>
+              <button class="btn bsm bs" onClick=${()=>setSelDay(null)}>✕</button>
+            </div>
+            ${selEvs.map(e=>html`
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--sep)">
+                <span style="font-size:20px">${TIC[e.type]}</span>
+                <div style="flex:1"><b style="font-size:14px">${e.label}</b><div style="font-size:12px;color:var(--t3)">${e.type==='ingreso'?'Ingreso':e.type==='gasto'?'Gasto fijo':e.type==='deuda'?'Deuda':'Cuota'}</div></div>
+                <b style="color:${e.type==='ingreso'?'var(--g)':'var(--r)'}">${e.type==='ingreso'?'+':'-'}${clp(e.amount)}</b>
+              </div>`)}
+            <div style="display:flex;justify-content:space-between;padding-top:10px;border-top:2px solid var(--sep);margin-top:4px">
+              <b>Balance del día</b>
+              <b style="color:${selEvs.reduce((s,e)=>s+(e.type==='ingreso'?e.amount:-e.amount),0)>=0?'var(--g)':'var(--r)'}">
+                ${clp(selEvs.reduce((s,e)=>s+(e.type==='ingreso'?e.amount:-e.amount),0))}
+              </b>
+            </div>
+          </div>`}
+
         ${upcoming.length>0?html`
-          <div class="slabel">Próximos pagos</div>
+          <div class="slabel">Próximos eventos</div>
           <div class="card">
-            ${upcoming.map((e,i)=>{
+            ${upcoming.slice(0,10).map(e=>{
               const dd=new Date(y,mo,e.day),diff=Math.ceil((dd-today)/864e5)
               return html`
-                <div class="li">
-                  <div class="lic" style="background:${e.type==='deuda'?'var(--rl)':'var(--ol)'}">${e.type==='deuda'?'💳':'📦'}</div>
-                  <div class="lcd"><div class="ltt">${e.label}</div><div class="lsb">${dd.toLocaleDateString('es-CL',{day:'numeric',month:'long'})} · ${diff===0?'Hoy':diff===1?'Mañana':'En '+diff+' días'}</div></div>
-                  <div>
-                    <div class="lam neg">${clp(e.amount)}</div>
-                    ${diff<=3?html`<div style="margin-top:2px"><span class="badge br2">Urgente</span></div>`:''}
+                <div class="li" onClick=${()=>setSelDay(e.day)} style="cursor:pointer">
+                  <div class="lic" style="background:${e.type==='ingreso'?'var(--gl)':e.type==='gasto'?'var(--rl)':e.type==='deuda'?'var(--rl)':'var(--ol)'}">${TIC[e.type]}</div>
+                  <div class="lcd"><div class="ltt">${e.label}</div><div class="lsb">${dd.toLocaleDateString('es-CL',{day:'numeric',month:'long'})} · ${diff===0?'🔴 Hoy':diff===1?'Mañana':'En '+diff+' días'}</div></div>
+                  <div style="text-align:right">
+                    <div class="lam" style="color:${e.type==='ingreso'?'var(--g)':'var(--r)'}">${e.type==='ingreso'?'+':'-'}${clp(e.amount)}</div>
+                    ${diff<=3&&e.type!=='ingreso'?html`<span class="badge br2" style="font-size:10px">Urgente</span>`:''}
                   </div>
                 </div>`})}
           </div>`:''}
-        ${events.length===0?html`<div class="empty"><div style="font-size:48px">📅</div><b>Sin eventos este mes</b><span style="color:var(--t3)">Agrega deudas y cuotas para ver tus compromisos</span></div>`:''}
+        ${allEvents.length===0?html`<div class="empty"><div style="font-size:48px">📅</div><b>Sin eventos este mes</b><span style="color:var(--t3)">Agrega ingresos fijos, gastos, deudas y cuotas para ver tus compromisos</span></div>`:''}
       </div>
     </div>`
 }
