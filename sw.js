@@ -1,8 +1,9 @@
-const CACHE = 'misfinanzas-v4'
-const FILES = ['/', '/index.html', '/app.html', '/sw.js', '/manifest.json', '/lib/preact.js', '/lib/preact-hooks.js', '/lib/htm.js', '/lib/chart-umd.js', '/lib/xlsx.min.js']
+const CACHE = 'misfinanzas-v5'
+const BASE = new URL('./', self.location).href
+const FILES = ['', 'index.html', 'sw.js', 'manifest.json', 'lib/preact.js', 'lib/preact-hooks.js', 'lib/htm.js', 'lib/chart-umd.js']
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()))
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => BASE + f))).then(() => self.skipWaiting()))
 })
 
 self.addEventListener('activate', e => {
