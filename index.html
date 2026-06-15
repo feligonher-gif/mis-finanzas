@@ -281,7 +281,9 @@ function Provider({children}) {
         DB.getAll('debts'),DB.getAll('installments'),DB.getAll('specials'),
         DB.getSettings()
       ])
-      dispatch({type:'LOAD',p:{incomes,expenses,goals,debts,installments,specials,settings}})
+      const loaded={incomes,expenses,goals,debts,installments,specials,settings}
+      dispatch({type:'LOAD',p:loaded})
+      dispararNotifHoy(loaded)
     })()
   },[])
   useEffect(()=>{
@@ -1170,6 +1172,59 @@ function GastosEsp() {
 }
 
 // ── Calendario ────────────────────────────────────────────────────────────────
+function buildCalEvents(state, y, mo) {
+  const evs=[]
+  const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
+  // Todos los ingresos del mes
+  state.incomes.forEach(i=>{
+    const d=new Date(i.date)
+    if(d.getFullYear()===y&&d.getMonth()===mo)
+      evs.push({day:d.getDate(),label:i.description||ILABELS[i.category]||i.category,amount:i.amount,type:'ingreso',rawDate:d,sub:ILABELS[i.category]||i.category})
+  })
+  // Todos los gastos del mes
+  state.expenses.forEach(e=>{
+    const d=new Date(e.date)
+    if(d.getFullYear()===y&&d.getMonth()===mo)
+      evs.push({day:d.getDate(),label:e.description||ELABELS[e.category]||e.category,amount:e.amount,type:'gasto',rawDate:d,sub:ELABELS[e.category]?.replace(/^.\s/,'')||e.category})
+  })
+  // Deudas — proyectar pago mensual al día de nextPaymentDate
+  state.debts.forEach(d=>{
+    const dd=new Date(d.nextPaymentDate)
+    // mostrar en el mes visible usando el mismo día del mes
+    const rawDate=new Date(y,mo,dd.getDate())
+    evs.push({day:dd.getDate(),label:d.name,amount:d.monthlyPayment,type:'deuda',rawDate,sub:'Cuota deuda'})
+  })
+  // Cuotas activas
+  state.installments.filter(i=>i.paidInstallments<i.numInstallments).forEach(i=>{
+    const st=new Date(i.startDate),diff=(y-st.getFullYear())*12+(mo-st.getMonth())
+    if(diff>=0&&diff<i.numInstallments){
+      const rawDate=new Date(y,mo,st.getDate())
+      evs.push({day:st.getDate(),label:i.productName,amount:i.monthlyAmount,type:'cuota',rawDate,sub:`Cuota ${i.paidInstallments+1+diff}/${i.numInstallments}`})
+    }
+  })
+  return evs
+}
+
+function dispararNotifHoy(state) {
+  if(typeof Notification==='undefined'||Notification.permission!=='granted') return
+  const hoy=new Date(),ty=hoy.getFullYear(),tm=hoy.getMonth(),td=hoy.getDate()
+  const clave='notif_'+ty+'-'+s2(tm+1)+'-'+s2(td)
+  if(localStorage.getItem(clave)) return // ya se notificó hoy
+  const evs=buildCalEvents(state,ty,tm).filter(e=>e.day===td)
+  if(!evs.length) return
+  localStorage.setItem(clave,'1')
+  setTimeout(()=>{
+    evs.forEach(e=>{
+      try{
+        new Notification('📅 Mis Finanzas',{
+          body:`${e.type==='ingreso'?'💰 Ingreso':'💸 Pago'}: ${e.label} — ${e.type==='ingreso'?'+':'-'}${clp(e.amount)}`,
+          tag:'mf-'+e.type+'-'+e.label
+        })
+      }catch(_){}
+    })
+  },1500)
+}
+
 function Calendario() {
   const {state,dispatch} = useApp()
   const today=new Date()
@@ -1182,66 +1237,31 @@ function Calendario() {
   const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
 
   async function pedirNotif(){
-    if(typeof Notification==='undefined')return
+    if(typeof Notification==='undefined'){alert('Tu dispositivo no soporta notificaciones web.');return}
     const p=await Notification.requestPermission()
     setNotifPerm(p)
-    if(p==='granted') dispararNotifHoy()
+    if(p==='granted'){
+      localStorage.removeItem('notif_'+today.getFullYear()+'-'+s2(today.getMonth()+1)+'-'+s2(today.getDate()))
+      dispararNotifHoy(state)
+    }
   }
 
-  function dispararNotifHoy(){
-    const t=new Date(),ty=t.getFullYear(),tm=t.getMonth(),td=t.getDate()
-    const evHoy=allEvents.filter(e=>new Date(e.rawDate).getFullYear()===ty&&new Date(e.rawDate).getMonth()===tm&&new Date(e.rawDate).getDate()===td)
-    evHoy.forEach(e=>{
-      new Notification('📅 Mis Finanzas — Recordatorio',{
-        body:`${e.label}: ${e.amount>0?(e.type==='ingreso'?'+ ':'- ')+clp(e.amount):'Hoy'}`,
-        icon:'/lib/icon.png'
-      })
-    })
-  }
-
-  const allEvents=useMemo(()=>{
-    const evs=[]
-    // Ingresos fijos (recurrentes)
-    state.incomes.filter(i=>i.type==='fijo'||i.recurrent).forEach(i=>{
-      const d=new Date(i.date),day=d.getDate()
-      const rawDate=new Date(y,mo,day)
-      evs.push({day,label:i.description||i.category,amount:i.amount,type:'ingreso',rawDate})
-    })
-    // Gastos fijos
-    state.expenses.filter(e=>e.type==='fijo').forEach(e=>{
-      const d=new Date(e.date),day=d.getDate()
-      const rawDate=new Date(y,mo,day)
-      evs.push({day,label:e.description||ELABELS[e.category]||e.category,amount:e.amount,type:'gasto',rawDate})
-    })
-    // Deudas
-    state.debts.forEach(d=>{
-      const dd=new Date(d.nextPaymentDate)
-      if(dd.getFullYear()===y&&dd.getMonth()===mo)
-        evs.push({day:dd.getDate(),label:d.name,amount:d.monthlyPayment,type:'deuda',rawDate:dd})
-    })
-    // Cuotas
-    state.installments.filter(i=>i.paidInstallments<i.numInstallments).forEach(i=>{
-      const st=new Date(i.startDate),diff=(y-st.getFullYear())*12+(mo-st.getMonth())
-      if(diff>=0&&diff<i.numInstallments){
-        const rawDate=new Date(y,mo,st.getDate())
-        evs.push({day:st.getDate(),label:i.productName,amount:i.monthlyAmount,type:'cuota',rawDate})
-      }
-    })
-    return evs
-  },[state.debts,state.installments,state.incomes,state.expenses,y,mo])
-
+  const allEvents=useMemo(()=>buildCalEvents(state,y,mo),[state.debts,state.installments,state.incomes,state.expenses,y,mo])
   const byDay=useMemo(()=>{const m={};allEvents.forEach(e=>{if(!m[e.day])m[e.day]=[];m[e.day].push(e)});return m},[allEvents])
-  const upcoming=allEvents.filter(e=>e.rawDate>=today).sort((a,b)=>a.day-b.day)
-  const selEvs=selDay?byDay[selDay]||[]:null
+  const todayEvs=byDay[today.getDate()]||[]
+  const upcoming=allEvents.filter(e=>{const d=new Date(y,mo,e.day);return d>=new Date(today.getFullYear(),today.getMonth(),today.getDate())}).sort((a,b)=>a.day-b.day)
+  const selEvs=selDay!=null?byDay[selDay]||[]:null
   const TC={ingreso:'var(--g)',gasto:'var(--r)',deuda:'var(--r)',cuota:'var(--o)'}
   const TIC={ingreso:'💰',gasto:'💸',deuda:'💳',cuota:'📦'}
+  const isCurrMonth=y===today.getFullYear()&&mo===today.getMonth()
 
   return html`
     <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
       <div class="hdr">
         <button class="back" onClick=${()=>dispatch({type:'SUB',p:null})}>‹ Volver</button>
         <div style="flex:1;text-align:center"><div class="htitle" style="font-size:22px">📅 Calendario</div></div>
-        <button class="btn bsm" style="background:${notifPerm==='granted'?'var(--gl)':'var(--al)'};color:${notifPerm==='granted'?'var(--g)':'var(--a)'}" onClick=${pedirNotif}>
+        <button class="btn bsm" style="background:${notifPerm==='granted'?'var(--gl)':'var(--al)'};color:${notifPerm==='granted'?'var(--g)':'var(--a)'}" onClick=${pedirNotif}
+          title=${notifPerm==='granted'?'Notificaciones activas':'Activar notificaciones'}>
           ${notifPerm==='granted'?'🔔':'🔕'}
         </button>
       </div>
@@ -1249,45 +1269,75 @@ function Calendario() {
         ${notifPerm!=='granted'&&html`
           <div class="card" style="margin-bottom:12px;background:var(--al);border:1px solid var(--a)">
             <div style="display:flex;align-items:center;gap:10px">
-              <span style="font-size:24px">🔔</span>
-              <div style="flex:1"><b style="color:var(--a)">Activar notificaciones</b><div style="font-size:13px;color:var(--t2);margin-top:2px">Recibe alertas el día de cada pago o ingreso</div></div>
+              <span style="font-size:26px">🔔</span>
+              <div style="flex:1">
+                <b style="color:var(--a)">Activar notificaciones</b>
+                <div style="font-size:12px;color:var(--t2);margin-top:2px">Te avisamos automáticamente cada día que tengas un pago o ingreso registrado</div>
+              </div>
               <button class="btn bp bsm" onClick=${pedirNotif}>Activar</button>
             </div>
           </div>`}
+
+        ${isCurrMonth&&todayEvs.length>0&&html`
+          <div class="card" style="margin-bottom:12px;background:var(--al);border:2px solid var(--a)">
+            <div style="font-weight:700;color:var(--a);margin-bottom:8px">📍 Hoy — ${today.toLocaleDateString('es-CL',{day:'numeric',month:'long'})}</div>
+            ${todayEvs.map(e=>html`
+              <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--sep)">
+                <span>${TIC[e.type]}</span>
+                <span style="flex:1;font-size:14px">${e.label}</span>
+                <b style="color:${TC[e.type]}">${e.type==='ingreso'?'+':'-'}${clp(e.amount)}</b>
+              </div>`)}
+          </div>`}
+
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
           <button class="btn bs bsm" onClick=${()=>{setVd(new Date(y,mo-1,1));setSelDay(null)}}>‹</button>
           <b style="font-size:17px;text-transform:capitalize">${MONTHS[mo]} ${y}</b>
           <button class="btn bs bsm" onClick=${()=>{setVd(new Date(y,mo+1,1));setSelDay(null)}}>›</button>
         </div>
-        <div class="card">
+        <div class="card" style="padding:10px">
           <div class="cgrid" style="margin-bottom:6px">${DAYS.map(d=>html`<div class="cdh">${d}</div>`)}</div>
           <div class="cgrid">
             ${Array.from({length:fd},(_,i)=>html`<div key=${`e${i}`}></div>`)}
             ${Array.from({length:dim},(_,i)=>{
-              const day=i+1,isToday=day===today.getDate()&&mo===today.getMonth()&&y===today.getFullYear()
-              const isSel=day===selDay,evs=byDay[day]
+              const day=i+1
+              const isToday=day===today.getDate()&&mo===today.getMonth()&&y===today.getFullYear()
+              const isSel=day===selDay
+              const evs=byDay[day]
+              const hasInc=evs?.some(e=>e.type==='ingreso')
+              const hasExp=evs?.some(e=>e.type!=='ingreso')
               return html`
-                <div class="cd ${isToday?'today':''}" style="position:relative;cursor:${evs?'pointer':'default'};outline:${isSel?'2px solid var(--a)':'none'};border-radius:8px" onClick=${()=>setSelDay(evs?day:null)}>
+                <div class="cd ${isToday?'today':''}"
+                  style="position:relative;cursor:${evs?'pointer':'default'};box-shadow:${isSel?'0 0 0 2px var(--a)':'none'};border-radius:8px"
+                  onClick=${()=>setSelDay(evs?(isSel?null:day):null)}>
                   <span>${day}</span>
-                  ${evs&&html`<div style="display:flex;gap:2px;margin-top:2px;justify-content:center;flex-wrap:wrap">
-                    ${evs.slice(0,3).map(e=>html`<div style="width:5px;height:5px;border-radius:50%;background:${isToday?'#fff':TC[e.type]}"></div>`)}
+                  ${evs&&html`<div style="display:flex;gap:2px;margin-top:2px;justify-content:center">
+                    ${hasInc&&html`<div style="width:5px;height:5px;border-radius:50%;background:${isToday?'#fff':'var(--g)'}"></div>`}
+                    ${hasExp&&html`<div style="width:5px;height:5px;border-radius:50%;background:${isToday?'rgba(255,255,255,.7)':'var(--r)'}"></div>`}
                   </div>`}
                 </div>`})}
           </div>
+          <div style="display:flex;gap:12px;margin-top:10px;padding-top:8px;border-top:1px solid var(--sep);font-size:11px;color:var(--t3)">
+            <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--g);margin-right:4px"></span>Ingreso</span>
+            <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--r);margin-right:4px"></span>Gasto / pago</span>
+          </div>
         </div>
 
-        ${selEvs&&html`
+        ${selEvs!=null&&html`
           <div class="card" style="margin-top:12px;border:2px solid var(--a)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-              <b>${selDay} de ${MONTHS[mo]}</b>
+              <b style="color:var(--a)">${selDay} de ${MONTHS[mo]}</b>
               <button class="btn bsm bs" onClick=${()=>setSelDay(null)}>✕</button>
             </div>
-            ${selEvs.map(e=>html`
-              <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--sep)">
-                <span style="font-size:20px">${TIC[e.type]}</span>
-                <div style="flex:1"><b style="font-size:14px">${e.label}</b><div style="font-size:12px;color:var(--t3)">${e.type==='ingreso'?'Ingreso':e.type==='gasto'?'Gasto fijo':e.type==='deuda'?'Deuda':'Cuota'}</div></div>
-                <b style="color:${e.type==='ingreso'?'var(--g)':'var(--r)'}">${e.type==='ingreso'?'+':'-'}${clp(e.amount)}</b>
-              </div>`)}
+            ${selEvs.length===0?html`<div style="color:var(--t3);text-align:center;padding:8px">Sin movimientos</div>`:
+              selEvs.map(e=>html`
+                <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--sep)">
+                  <span style="font-size:20px">${TIC[e.type]}</span>
+                  <div style="flex:1">
+                    <div style="font-weight:600;font-size:14px">${e.label}</div>
+                    <div style="font-size:11px;color:var(--t3)">${e.sub}</div>
+                  </div>
+                  <b style="color:${TC[e.type]}">${e.type==='ingreso'?'+':'-'}${clp(e.amount)}</b>
+                </div>`)}
             <div style="display:flex;justify-content:space-between;padding-top:10px;border-top:2px solid var(--sep);margin-top:4px">
               <b>Balance del día</b>
               <b style="color:${selEvs.reduce((s,e)=>s+(e.type==='ingreso'?e.amount:-e.amount),0)>=0?'var(--g)':'var(--r)'}">
@@ -1297,21 +1347,29 @@ function Calendario() {
           </div>`}
 
         ${upcoming.length>0?html`
-          <div class="slabel">Próximos eventos</div>
+          <div class="slabel">Próximos movimientos</div>
           <div class="card">
-            ${upcoming.slice(0,10).map(e=>{
-              const dd=new Date(y,mo,e.day),diff=Math.ceil((dd-today)/864e5)
+            ${upcoming.slice(0,15).map(e=>{
+              const dd=new Date(y,mo,e.day),diff=Math.round((new Date(y,mo,e.day)-new Date(today.getFullYear(),today.getMonth(),today.getDate()))/864e5)
               return html`
                 <div class="li" onClick=${()=>setSelDay(e.day)} style="cursor:pointer">
-                  <div class="lic" style="background:${e.type==='ingreso'?'var(--gl)':e.type==='gasto'?'var(--rl)':e.type==='deuda'?'var(--rl)':'var(--ol)'}">${TIC[e.type]}</div>
-                  <div class="lcd"><div class="ltt">${e.label}</div><div class="lsb">${dd.toLocaleDateString('es-CL',{day:'numeric',month:'long'})} · ${diff===0?'🔴 Hoy':diff===1?'Mañana':'En '+diff+' días'}</div></div>
+                  <div class="lic" style="background:${e.type==='ingreso'?'var(--gl)':'var(--rl)'}">${TIC[e.type]}</div>
+                  <div class="lcd">
+                    <div class="ltt">${e.label}</div>
+                    <div class="lsb">${dd.toLocaleDateString('es-CL',{day:'numeric',month:'long'})} · ${diff===0?'🔴 Hoy':diff===1?'Mañana':'En '+diff+' días'}</div>
+                  </div>
                   <div style="text-align:right">
-                    <div class="lam" style="color:${e.type==='ingreso'?'var(--g)':'var(--r)'}">${e.type==='ingreso'?'+':'-'}${clp(e.amount)}</div>
-                    ${diff<=3&&e.type!=='ingreso'?html`<span class="badge br2" style="font-size:10px">Urgente</span>`:''}
+                    <div class="lam" style="color:${TC[e.type]}">${e.type==='ingreso'?'+':'-'}${clp(e.amount)}</div>
+                    ${diff<=2&&e.type!=='ingreso'?html`<span class="badge br2" style="font-size:10px">Urgente</span>`:''}
                   </div>
                 </div>`})}
           </div>`:''}
-        ${allEvents.length===0?html`<div class="empty"><div style="font-size:48px">📅</div><b>Sin eventos este mes</b><span style="color:var(--t3)">Agrega ingresos fijos, gastos, deudas y cuotas para ver tus compromisos</span></div>`:''}
+        ${allEvents.length===0?html`
+          <div class="empty">
+            <div style="font-size:48px">📅</div>
+            <b>Sin movimientos este mes</b>
+            <span style="color:var(--t3);text-align:center">Registra ingresos, gastos, deudas y cuotas para verlos aquí</span>
+          </div>`:''}
       </div>
     </div>`
 }
@@ -1919,6 +1977,7 @@ function App() {
 }
 
 render(html`<${Provider}><${App}/></${Provider}>`, document.getElementById('app'))
+
 </script>
 <script>
 if('serviceWorker' in navigator) {
