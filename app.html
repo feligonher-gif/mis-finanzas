@@ -8,19 +8,19 @@
 <meta name="apple-mobile-web-app-title" content="MisFinanzas">
 <meta name="theme-color" content="#007AFF">
 <title>Mis Finanzas</title>
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='40' fill='%23007AFF'/><text y='140' x='96' text-anchor='middle' font-size='120'>💼</text></svg>">
 <script type="importmap">
 {
   "imports": {
-    "preact": "/lib/preact.js",
-    "preact/hooks": "/lib/preact-hooks.js",
-    "htm": "/lib/htm.js"
+    "preact": "./lib/preact.js",
+    "preact/hooks": "./lib/preact-hooks.js",
+    "htm": "./lib/htm.js"
   }
 }
 </script>
-<script src="/lib/chart-umd.js"></script>
-<script src="/lib/xlsx.min.js"></script>
+<script src="./lib/chart-umd.js"></script>
+<script src="./lib/xlsx.min.js"></script>
 <style>
 :root{--bg:#f2f2f7;--s:#fff;--s2:#f2f2f7;--s3:#e5e5ea;--t:#1c1c1e;--t2:rgba(60,60,67,.6);--t3:#8e8e93;--a:#007AFF;--al:#dceeff;--g:#34C759;--gl:#e4f8ea;--r:#FF3B30;--rl:#ffe3e1;--o:#FF9500;--ol:#fff4e0;--p:#AF52DE;--sep:rgba(60,60,67,.12);--r8:8px;--r12:12px;--r16:16px;--sh:0 2px 12px rgba(0,0,0,.08);--sh2:0 4px 24px rgba(0,0,0,.12);--nav:83px;--sb:env(safe-area-inset-bottom,0px)}
 [data-theme=dark]{--bg:#1c1c1e;--s:#2c2c2e;--s2:#3a3a3c;--s3:#48484a;--t:#fff;--t2:rgba(235,235,245,.6);--t3:#8e8e93;--al:#0a2d5c;--gl:#0d3320;--rl:#3b1410;--ol:#3b2600;--sep:rgba(255,255,255,.1);--sh:0 2px 12px rgba(0,0,0,.3);--sh2:0 4px 24px rgba(0,0,0,.4)}
@@ -234,7 +234,7 @@ const last6 = () => { const ms=[]; const n=new Date(); for(let i=5;i>=0;i--){ co
 const next6 = () => { const ms=[]; const n=new Date(); for(let i=0;i<6;i++){ const d=new Date(n.getFullYear(),n.getMonth()+i,1); ms.push(`${d.getFullYear()}-${s2(d.getMonth()+1)}`)} return ms }
 
 const ILABELS = {sueldo:'💼 Sueldo',adicional:'➕ Adicional',bono:'🎁 Bono',freelance:'💻 Freelance',arriendo:'🏠 Arriendo',otro:'💵 Otro'}
-const ELABELS = {vivienda:'🏠 Vivienda',alimentacion:'🍽 Alimentación',transporte:'🚌 Transporte',salud:'💊 Salud',educacion:'📚 Educación',entretenimiento:'🎬 Entret.',ropa:'👗 Ropa',servicios:'⚡ Servicios',vehiculo:'🚗 Vehículo',mascotas:'🐾 Mascotas',hormiga:'☕ Hormiga',otro:'📦 Otro'}
+const ELABELS = {vivienda:'🏠 Vivienda',alimentacion:'🍽 Alimentación',transporte:'🚌 Transporte',salud:'💊 Salud',educacion:'📚 Educación',entretenimiento:'🎬 Entret.',ropa:'👗 Ropa',servicios:'⚡ Servicios',vehiculo:'🚗 Vehículo',mascotas:'🐾 Mascotas',hormiga:'☕ Hormiga',metas:'🎯 Metas',otro:'📦 Otro'}
 const ETLABELS = {fijo:'📌 Fijo',variable:'📊 Variable',hormiga:'🐜 Hormiga'}
 const DTLABELS = {tarjeta:'💳 Tarjeta',credito_consumo:'🏦 Consumo',prestamo:'🤝 Préstamo',hipoteca:'🏠 Hipoteca',otro:'📋 Otro'}
 const SCLABELS = {vehiculo:'🚗 Vehículo',moto:'🏍️ Moto',hidrogeno:'⚡ Hidrógeno',salud:'💊 Salud',educacion:'📚 Educación',hogar:'🏠 Hogar',viaje:'✈️ Viaje',otro:'📋 Otro'}
@@ -428,6 +428,20 @@ function Dashboard() {
           ${[['💰 Ingresos',clp(mi),'g'],['💸 Gastos totales',clp(me+md+mi2),'r'],['💵 Saldo del mes',clp(avail),avail>=0?'g':'r'],['💾 Saldo acumulado',clp(saldoAcum),saldoAcum>=0?'g':'r']].map(([l,v,c])=>html`
             <div class="card"><div class="slbl">${l}</div><div class="sval ${c}">${v}</div></div>`)}
         </div>
+        ${goals.length>0&&(()=>{const totalAh=goals.reduce((s,g)=>s+g.currentAmount,0);const totalObj=goals.reduce((s,g)=>s+g.targetAmount,0);return html`
+          <div class="card" style="margin-top:10px;background:linear-gradient(135deg,#34C759,#30D158);color:#fff">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-size:12px;font-weight:600;opacity:.8;margin-bottom:3px">💰 TOTAL AHORRADO EN METAS</div>
+                <div style="font-size:28px;font-weight:900;letter-spacing:-1px">${clp(totalAh)}</div>
+                <div style="font-size:12px;opacity:.8;margin-top:4px">de ${clp(totalObj)} en ${goals.length} meta${goals.length>1?'s':''}</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:32px;font-weight:900">${pct(totalAh,totalObj)}%</div>
+                <button class="btn bsm" style="background:rgba(255,255,255,.25);color:#fff;margin-top:6px" onClick=${()=>dispatch({type:'TAB',p:'metas'})}>Ver metas</button>
+              </div>
+            </div>
+          </div>`})()}
         ${expByCat.length>0&&html`
           <div class="card" style="margin-top:10px">
             <div class="slabel" style="margin-top:0">Gastos por categoría</div>
@@ -706,7 +720,12 @@ function Metas() {
   const [fundsAmt,setFA] = useState('')
   async function save(g){await DB.put('goals',g);dispatch({type:editing?'UPD_G':'ADD_G',p:g});setOpen(false);setEdit(null)}
   async function del(id){if(!confirm('¿Eliminar meta?'))return;await DB.del('goals',id);dispatch({type:'DEL_G',p:id})}
-  async function addF(g,amt){const u={...g,currentAmount:Math.min(g.currentAmount+amt,g.targetAmount)};await DB.put('goals',u);dispatch({type:'UPD_G',p:u})}
+  async function addF(g,amt){
+    const u={...g,currentAmount:Math.min(g.currentAmount+amt,g.targetAmount)};
+    await DB.put('goals',u);dispatch({type:'UPD_G',p:u});
+    const exp={id:uid(),category:'metas',amount:amt,description:`Aporte ${g.icon} ${g.name}`,date:todayISO(),createdAt:new Date().toISOString()};
+    await DB.put('expenses',exp);dispatch({type:'ADD_E',p:exp});
+  }
   return html`
     <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
       <div class="hdr">
@@ -1743,7 +1762,7 @@ render(html`<${Provider}><${App}/></${Provider}>`, document.getElementById('app'
 <script>
 if('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then(r => console.log('SW registrado', r.scope)).catch(e => console.log('SW error', e))
+    navigator.serviceWorker.register('sw.js').then(r => console.log('SW registrado', r.scope)).catch(e => console.log('SW error', e))
   })
 }
 </script>
