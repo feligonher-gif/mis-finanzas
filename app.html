@@ -971,22 +971,48 @@ function Simulador() {
   const verdict=!done||!p?null:newAvail<0?'bad':impPct>30||newAvail<mi*.1?'warn':'ok'
   const VD={ok:{e:'✅',t:'¡Sí puedes comprarlo!',d:'Esta compra es manejable con tus finanzas actuales.',c:'var(--g)'},warn:{e:'⚠️',t:'Con precaución',d:'Puedes comprarlo pero comprometerá un porcentaje alto de tus ingresos.',c:'var(--o)'},bad:{e:'❌',t:'No es recomendable',d:'Esta compra superaría tu capacidad de pago mensual.',c:'var(--r)'}}
 
-  // Proyección 6 meses
+  // Proyección mes a mes con datos reales de cada mes futuro
   const proj=useMemo(()=>{
     if(!done||!p) return []
     const meses=Math.max(n,6)
+    const now=new Date()
     return Array.from({length:meses},(_,i)=>{
-      const sinCompra=avail
-      const conCompra=i<n?avail-mp:avail
-      return {mes:i,sinCompra,conCompra,cuota:i<n?mp:0}
+      const d=new Date(now.getFullYear(),now.getMonth()+i,1)
+      const ym=`${d.getFullYear()}-${s2(d.getMonth()+1)}`
+      // Ingresos reales del mes (fijos se proyectan, variables solo aparecen en su mes)
+      const ingReal=state.incomes.filter(inc=>{
+        if(inMonth(inc.date,ym)) return true
+        // ingresos fijos: proyectar en meses futuros
+        if(inc.type==='fijo'&&i>0) return true
+        return false
+      }).reduce((s,inc)=>s+inc.amount,0)
+      // Gastos reales del mes (fijos se proyectan, variables solo en su mes)
+      const gasReal=state.expenses.filter(e=>{
+        if(inMonth(e.date,ym)) return true
+        if(e.type==='fijo'&&i>0) return true
+        return false
+      }).reduce((s,e)=>s+e.amount,0)
+      // Cuotas activas en ese mes
+      const cuotasReal=state.installments.filter(inst=>{
+        const paid=inst.paidInstallments, total=inst.numInstallments
+        const st=new Date(inst.startDate)
+        const diff=(d.getFullYear()-st.getFullYear())*12+(d.getMonth()-st.getMonth())
+        return diff>=0&&(paid+diff)<total
+      }).reduce((s,inst)=>s+inst.monthlyAmount,0)
+      // Deudas (constante mensual)
+      const deudasReal=state.debts.reduce((s,debt)=>s+debt.monthlyPayment,0)
+      const sinCompra=ingReal-gasReal-cuotasReal-deudasReal
+      const cuota=i<n?mp:0
+      const conCompra=sinCompra-cuota
+      return {mes:i,sinCompra,conCompra,cuota,ingReal,gasReal,label:d.toLocaleDateString('es-CL',{month:'short',year:'2-digit'})}
     })
-  },[done,p,n,mp,avail])
+  },[done,p,n,mp,state.incomes,state.expenses,state.installments,state.debts])
 
   useEffect(()=>{
     if(!projRef.current||!proj.length)return
     projC.current?.destroy()
     const tc=getComputedStyle(document.documentElement).getPropertyValue('--t3').trim()
-    const labels=proj.map((_,i)=>{const d=new Date();d.setMonth(d.getMonth()+i);return d.toLocaleDateString('es-CL',{month:'short'})})
+    const labels=proj.map(m=>m.label)
     projC.current=new Chart(projRef.current,{type:'bar',
       data:{labels,datasets:[
         {label:'Sin compra',data:proj.map(m=>m.sinCompra),backgroundColor:'#34C75966',borderColor:'#34C759',borderWidth:2,borderRadius:4},
