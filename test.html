@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Test</title></head>
+<body style="font-family:sans-serif;padding:20px">
+<div id="app" style="font-size:24px">⏳ Cargando...</div>
+<script src="./lib/preact.js"></script>
+<script src="./lib/preact-hooks.js"></script>
+<script src="./lib/htm.js"></script>
+<script>
+try {
+  document.getElementById('app').innerHTML = '✅ Librerías OK. preact=' + (typeof preact) + ' preactHooks=' + (typeof preactHooks) + ' htm=' + (typeof htm);
+  const {h,render} = preact;
+  const {useState} = preactHooks;
+  const html = htm.bind(h);
+  function App() {
+    const [n, setN] = useState(0);
+    return html`<div><h2>✅ App funciona!</h2><p>Contador: <b>${n}</b></p><button onClick=${()=>setN(n+1)} style="padding:12px 24px;font-size:18px">+1</button></div>`;
+  }
+  render(html`<${App}/>`, document.getElementById('app'));
+} catch(e) {
+  document.getElementById('app').innerHTML = '❌ Error: ' + e.message;
+}
+</script>
+</body></html>
