@@ -10,15 +10,9 @@
 <title>Mis Finanzas</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='40' fill='%23007AFF'/><text y='140' x='96' text-anchor='middle' font-size='120'>💼</text></svg>">
-<script type="importmap">
-{
-  "imports": {
-    "preact": "./lib/preact.js",
-    "preact/hooks": "./lib/preact-hooks.js",
-    "htm": "./lib/htm.js"
-  }
-}
-</script>
+<script src="./lib/preact.js"></script>
+<script src="./lib/preact-hooks.js"></script>
+<script src="./lib/htm.js"></script>
 <script src="./lib/chart-umd.js"></script>
 <script src="./lib/xlsx.min.js"></script>
 <style>
@@ -132,12 +126,10 @@ textarea.inp{resize:vertical;min-height:80px;line-height:1.5}
 <body>
 <div id="app"></div>
 
-<script type="module">
-// ── Imports (local lib/) ─────────────────────────────────────────────────────
-import { h, render, createContext } from 'preact'
-import { useState, useEffect, useRef, useContext, useReducer, useMemo, useCallback } from 'preact/hooks'
-import htm from 'htm'
-// Chart.js loaded as UMD global via <script src="/lib/chart-umd.js">
+<script>
+// ── Globals (UMD) ────────────────────────────────────────────────────────────
+const { h, render, createContext } = preact
+const { useState, useEffect, useRef, useContext, useReducer, useMemo, useCallback } = preactHooks
 const html = htm.bind(h)
 // Register all Chart.js components from UMD global
 if (typeof Chart !== 'undefined' && Chart.registerables) Chart.register(...Chart.registerables)
