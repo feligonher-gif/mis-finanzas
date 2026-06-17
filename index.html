@@ -159,17 +159,22 @@ function idbReq(req) { return new Promise((res, rej) => { req.onsuccess = e => r
 let _db
 async function getDB() {
   if (_db) return _db
-  _db = await idbOpen('mis-finanzas', 1, (db) => {
-    ['incomes','expenses','goals','debts','installments','specials'].forEach(s => {
-      const st = db.createObjectStore(s, { keyPath: 'id' })
-      if (['incomes','expenses','specials'].includes(s)) st.createIndex('by-date','date')
-    })
-    db.createObjectStore('settings')
+  _db = await idbOpen('mis-finanzas', 2, (db, oldV) => {
+    if(oldV < 1) {
+      ['incomes','expenses','goals','debts','installments','specials'].forEach(s => {
+        const st = db.createObjectStore(s, { keyPath: 'id' })
+        if (['incomes','expenses','specials'].includes(s)) st.createIndex('by-date','date')
+      })
+      db.createObjectStore('settings')
+    }
+    if(oldV < 2) {
+      db.createObjectStore('checks', { keyPath: 'id' })
+    }
   })
   return _db
 }
 
-const DEFAULT_SETTINGS = { theme:'system', pin:'', monthlyGoalPct:20 }
+const DEFAULT_SETTINGS = { theme:'system', pin:'', monthlyGoalPct:20, limFalabella:0, limSantander:0, saldoEfectivo:0 }
 const DB = {
   async getAll(store) {
     const db = await getDB()
@@ -228,7 +233,9 @@ const next6 = () => { const ms=[]; const n=new Date(); for(let i=0;i<6;i++){ con
 
 const ILABELS = {sueldo:'💼 Sueldo',adicional:'➕ Adicional',bono:'🎁 Bono',freelance:'💻 Freelance',arriendo:'🏠 Arriendo',otro:'💵 Otro'}
 const ELABELS = {vivienda:'🏠 Vivienda',alimentacion:'🍽 Alimentación',transporte:'🚌 Transporte',salud:'💊 Salud',educacion:'📚 Educación',entretenimiento:'🎬 Entret.',ropa:'👗 Ropa',servicios:'⚡ Servicios',vehiculo:'🚗 Vehículo',mascotas:'🐾 Mascotas',hormiga:'☕ Hormiga',metas:'🎯 Metas',otro:'📦 Otro'}
-const ETLABELS = {fijo:'📌 Fijo',variable:'📊 Variable',hormiga:'🐜 Hormiga'}
+const ETLABELS = {fijo:'📌 Fijo',falabella:'🟣 Falabella',santander:'🔴 Santander',efectivo:'💵 Efectivo'}
+const ETCOMPAT = {variable:'falabella',hormiga:'efectivo'} // backward compat
+const ETCOLOR = {fijo:'var(--a)',falabella:'#7B2D8B',santander:'#CC0000',efectivo:'var(--g)'}
 const DTLABELS = {tarjeta:'💳 Tarjeta',credito_consumo:'🏦 Consumo',prestamo:'🤝 Préstamo',hipoteca:'🏠 Hipoteca',otro:'📋 Otro'}
 const SCLABELS = {vehiculo:'🚗 Vehículo',moto:'🏍️ Moto',hidrogeno:'⚡ Hidrógeno',salud:'💊 Salud',educacion:'📚 Educación',hogar:'🏠 Hogar',viaje:'✈️ Viaje',otro:'📋 Otro'}
 const SC_TO_CAT = {vehiculo:'transporte',moto:'transporte',hidrogeno:'servicios',salud:'salud',educacion:'educacion',hogar:'hogar',viaje:'transporte',otro:'otros'}
@@ -239,7 +246,7 @@ const GCOLS = ['#007AFF','#34C759','#FF9500','#FF3B30','#AF52DE','#5856D6','#FF2
 // ── Context & State ──────────────────────────────────────────────────────────
 const Ctx = createContext(null)
 const initState = {
-  incomes:[], expenses:[], goals:[], debts:[], installments:[], specials:[],
+  incomes:[], expenses:[], goals:[], debts:[], installments:[], specials:[], checks:[],
   settings: DEFAULT_SETTINGS, loading:true,
   tab:'dashboard', subpage:null, month: curMonth()
 }
@@ -268,6 +275,9 @@ function reducer(s, a) {
     case 'ADD_S': return {...s,specials:[...s.specials,a.p]}
     case 'UPD_S': return {...s,specials:s.specials.map(x=>x.id===a.p.id?a.p:x)}
     case 'DEL_S': return {...s,specials:s.specials.filter(x=>x.id!==a.p)}
+    case 'ADD_CHK': return {...s,checks:[...s.checks,a.p]}
+    case 'UPD_CHK': return {...s,checks:s.checks.map(x=>x.id===a.p.id?a.p:x)}
+    case 'DEL_CHK': return {...s,checks:s.checks.filter(x=>x.id!==a.p)}
     case 'SETTINGS': return {...s,settings:{...s.settings,...a.p}}
     default: return s
   }
@@ -277,12 +287,12 @@ function Provider({children}) {
   const [state,dispatch] = useReducer(reducer,initState)
   useEffect(()=>{
     (async()=>{
-      const [incomes,expenses,goals,debts,installments,specials,settings] = await Promise.all([
+      const [incomes,expenses,goals,debts,installments,specials,checks,settings] = await Promise.all([
         DB.getAll('incomes'),DB.getAll('expenses'),DB.getAll('goals'),
         DB.getAll('debts'),DB.getAll('installments'),DB.getAll('specials'),
-        DB.getSettings()
+        DB.getAll('checks'),DB.getSettings()
       ])
-      const loaded={incomes,expenses,goals,debts,installments,specials,settings}
+      const loaded={incomes,expenses,goals,debts,installments,specials,checks,settings}
       dispatch({type:'LOAD',p:loaded})
       dispararNotifHoy(loaded)
     })()
@@ -463,7 +473,7 @@ function Dashboard() {
           </div>`}
         <div class="slabel">Acceso rápido</div>
         <div class="grid3">
-          ${[['🤔','¿Puedo\ncomprarlo?','simulador'],['📅','Calendario\nfinanciero','calendario'],['📊','Reportes','reportes'],['🚗','Gastos\nespeciales','especiales'],['📦','Compras\nen cuotas','cuotas'],['⚙️','Configuración','configuracion']].map(([ic,lb,pg])=>html`
+          ${[['✅','Checklist\nmensual','checklist'],['🤔','¿Puedo\ncomprarlo?','simulador'],['📅','Calendario\nfinanciero','calendario'],['📊','Reportes','reportes'],['🚗','Gastos\nespeciales','especiales'],['📦','Compras\nen cuotas','cuotas'],['⚙️','Configuración','configuracion']].map(([ic,lb,pg])=>html`
             <button class="card" style="text-align:center;cursor:pointer;border:none;width:100%;padding:12px 6px" onClick=${()=>dispatch({type:'SUB',p:pg})}>
               <div style="font-size:26px">${ic}</div>
               <div style="font-size:11px;font-weight:600;color:var(--t);margin-top:5px;white-space:pre-line;line-height:1.3">${lb}</div>
@@ -555,19 +565,34 @@ function Ingresos() {
     </div>`
 }
 
+// helper: normaliza tipos viejos
+const normType = t => ETCOMPAT[t]||t||'falabella'
+
 // ── Gastos ────────────────────────────────────────────────────────────────────
 function ExpenseForm({initial,onSave}) {
+  const {state} = useApp()
   const [cat,setCat] = useState(initial?.category??'alimentacion')
-  const [type,setType] = useState(initial?.type??'variable')
+  const [type,setType] = useState(normType(initial?.type??'falabella'))
   const [amt,setAmt] = useState(initial?.amount?String(initial.amount):'')
   const [desc,setDesc] = useState(initial?.description??'')
   const [date,setDate] = useState(initial?.date??todayISO())
   const [notes,setNotes] = useState(initial?.notes??'')
   const [meses,setMeses] = useState('1')
   const mesesN = parseInt(meses)||1
+  const cm = curMonth()
+  // saldo disponible por tipo en el mes actual
+  const usadoMes = useMemo(()=>{
+    const r={falabella:0,santander:0,efectivo:0}
+    state.expenses.filter(e=>inMonth(e.date,cm)).forEach(e=>{const t=normType(e.type);if(r[t]!==undefined)r[t]+=e.amount})
+    return r
+  },[state.expenses,cm])
+  const dispFalabella = (state.settings.limFalabella||0) - usadoMes.falabella
+  const dispSantander = (state.settings.limSantander||0) - usadoMes.santander
+  const dispEfectivo  = (state.settings.saldoEfectivo||0) - usadoMes.efectivo
+
   function save(){
     const a=parseFloat(amt)||0;if(!a||!desc)return
-    const base={category:cat,type:cat==='hormiga'?'hormiga':type,amount:a,description:desc,notes:notes||undefined,createdAt:new Date().toISOString()}
+    const base={category:cat,type,amount:a,description:desc,notes:notes||undefined,createdAt:new Date().toISOString()}
     if(initial){onSave({id:initial.id,...base,date});return}
     const d=new Date(date+'T12:00:00')
     const items=[]
@@ -577,22 +602,35 @@ function ExpenseForm({initial,onSave}) {
     }
     onSave(mesesN>1?items:items[0])
   }
+  const TINFO = {
+    fijo:{desc:'Gastos que se repiten iguales cada mes',disp:null},
+    falabella:{desc:'Compras con tarjeta Falabella',disp:state.settings.limFalabella>0?`Disponible: ${clp(dispFalabella)}`:null},
+    santander:{desc:'Compras con tarjeta Santander',disp:state.settings.limSantander>0?`Disponible: ${clp(dispSantander)}`:null},
+    efectivo:{desc:'Gastos pagados en efectivo',disp:state.settings.saldoEfectivo>0?`Disponible: ${clp(dispEfectivo)}`:null},
+  }
   return html`
-    <div class="fg"><label class="fl">Tipo</label>
-      <div class="pills">${Object.entries(ETLABELS).map(([v,l])=>html`<button class="pill ${type===v?'on':''}" onClick=${()=>setType(v)}>${l}</button>`)}</div>
+    <div class="fg"><label class="fl">Tipo de gasto</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
+        ${Object.entries(ETLABELS).map(([v,l])=>html`
+          <button onClick=${()=>setType(v)} style="padding:10px;border-radius:12px;border:2px solid ${type===v?ETCOLOR[v]:'var(--sep)'};background:${type===v?ETCOLOR[v]+'18':'var(--s)'};cursor:pointer;text-align:left">
+            <div style="font-weight:700;color:${type===v?ETCOLOR[v]:'var(--t)'}">${l}</div>
+            <div style="font-size:11px;color:var(--t3);margin-top:2px">${TINFO[v].desc}</div>
+            ${TINFO[v].disp&&html`<div style="font-size:11px;font-weight:700;color:${ETCOLOR[v]};margin-top:2px">${TINFO[v].disp}</div>`}
+          </button>`)}
+      </div>
     </div>
     <div class="fg"><label class="fl">Categoría</label>
-      <div class="pills">${Object.entries(ELABELS).map(([v,l])=>html`<button class="pill ${cat===v?'on':''}" onClick=${()=>{setCat(v);if(v==='hormiga')setType('hormiga')}}>${l}</button>`)}</div>
+      <div class="pills">${Object.entries(ELABELS).map(([v,l])=>html`<button class="pill ${cat===v?'on':''}" onClick=${()=>setCat(v)}>${l}</button>`)}</div>
     </div>
     <div class="fg"><label class="fl">Monto</label>
       <div class="awrap"><span class="apfx">$</span><input class="inp ainp" type="number" inputmode="numeric" placeholder="0" value=${amt} onInput=${e=>setAmt(e.target.value)}/></div>
     </div>
     <div class="fg"><label class="fl">Descripción</label><input class="inp" placeholder="Ej: Supermercado" value=${desc} onInput=${e=>setDesc(e.target.value)}/></div>
-    <div class="fg"><label class="fl">Fecha inicio</label><input class="inp" type="date" value=${date} onInput=${e=>setDate(e.target.value)}/></div>
+    <div class="fg"><label class="fl">Fecha</label><input class="inp" type="date" value=${date} onInput=${e=>setDate(e.target.value)}/></div>
     ${!initial&&html`
     <div class="fg"><label class="fl">Repetir por (meses)</label>
       <div class="pills">${['1','2','3','6','12'].map(v=>html`<button class="pill ${meses===v?'on':''}" onClick=${()=>setMeses(v)}>${v==='1'?'Solo este mes':v+' meses'}</button>`)}</div>
-      ${mesesN>1&&html`<div style="font-size:12px;color:var(--t3);margin-top:6px">Se registrará en ${mesesN} meses consecutivos desde la fecha indicada</div>`}
+      ${mesesN>1&&html`<div style="font-size:12px;color:var(--t3);margin-top:6px">Se registrará en ${mesesN} meses consecutivos</div>`}
     </div>`}
     <div class="fg"><label class="fl">Notas</label><textarea class="inp" value=${notes} onInput=${e=>setNotes(e.target.value)}></textarea></div>
     <button class="btn br bfull" onClick=${save}>${initial?'✓ Guardar':mesesN>1?`+ Registrar en ${mesesN} meses`:'+ Registrar gasto'}</button>`
@@ -609,7 +647,11 @@ function Gastos() {
   const totalExp = useMemo(()=>items.reduce((s,e)=>s+e.amount,0),[items])
   const totalDeudas = useMemo(()=>state.debts.reduce((s,d)=>s+d.monthlyPayment,0),[state.debts])
   const total = totalExp + (showDebts?totalDeudas:0)
-  const byType = useMemo(()=>({fijo:items.filter(e=>e.type==='fijo').reduce((s,e)=>s+e.amount,0),variable:items.filter(e=>e.type==='variable').reduce((s,e)=>s+e.amount,0),hormiga:items.filter(e=>e.type==='hormiga').reduce((s,e)=>s+e.amount,0)}),[items])
+  const byType = useMemo(()=>{
+    const r={fijo:0,falabella:0,santander:0,efectivo:0}
+    items.forEach(e=>{const t=normType(e.type);if(r[t]!==undefined)r[t]+=e.amount})
+    return r
+  },[items])
   async function save(item){
     const list=Array.isArray(item)?item:[item]
     for(const it of list){await DB.put('expenses',it);dispatch({type:editing&&!Array.isArray(item)?'UPD_E':'ADD_E',p:it})}
@@ -625,8 +667,12 @@ function Gastos() {
       <div class="page">
         <${MonthNav} value=${state.month} onChange=${m=>dispatch({type:'MONTH',p:m})}/>
         <div class="grid2" style="margin-top:10px">
-          ${[['📌 Fijos',byType.fijo,'r'],['📊 Variables',byType.variable,'o'],['🐜 Hormiga',byType.hormiga,'p'],['🏦 Deudas',totalDeudas,'p']].map(([l,v,c])=>html`
-            <div class="card"><div class="slbl">${l}</div><div class="sval ${c}">${clp(v)}</div></div>`)}
+          ${[['📌 Fijos',byType.fijo,null,null],['🟣 Falabella',byType.falabella,state.settings.limFalabella,'#7B2D8B'],['🔴 Santander',byType.santander,state.settings.limSantander,'#CC0000'],['💵 Efectivo',byType.efectivo,state.settings.saldoEfectivo,'var(--g)']].map(([l,v,lim,col])=>html`
+            <div class="card" style="${col?`border-top:3px solid ${col}`:``}">
+              <div class="slbl">${l}</div>
+              <div class="sval r">${clp(v)}</div>
+              ${lim>0?html`<div style="font-size:11px;margin-top:4px;color:${(lim-v)<0?'var(--r)':'var(--t3)'}">Disp: <b style="color:${(lim-v)<0?'var(--r)':col||'var(--g)'}">${clp(lim-v)}</b></div>`:''}
+            </div>`)}
         </div>
         <div class="pills" style="margin-top:10px">
           ${[['todos','Todos'],...Object.entries(ETLABELS)].map(([v,l])=>html`<button class="pill ${filt===v?'on':''}" onClick=${()=>setFilt(v)}>${l}</button>`)}
@@ -641,7 +687,7 @@ function Gastos() {
                 <div class="lic" style="background:var(--rl)">${ELABELS[e.category]?.split(' ')[0]}</div>
                 <div class="lcd">
                   <div class="ltt">${e.description}</div>
-                  <div class="lsb">${ELABELS[e.category]?.replace(/^.\s/,'')} · ${fdate(e.date)} <span class="badge ${e.type==='fijo'?'ba2':e.type==='hormiga'?'bx2':'bo2'}" style="font-size:10px;padding:1px 5px">${e.type}</span></div>
+                  <div class="lsb">${ELABELS[e.category]?.replace(/^.\s/,'')} · ${fdate(e.date)} <span class="badge" style="font-size:10px;padding:1px 5px;background:${ETCOLOR[normType(e.type)]}22;color:${ETCOLOR[normType(e.type)]}">${ETLABELS[normType(e.type)]||e.type}</span></div>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px">
                   <span class="lam neg">${clp(e.amount)}</span>
@@ -1252,6 +1298,129 @@ function dispararNotifHoy(state) {
   },1500)
 }
 
+// ── Checklist mensual ─────────────────────────────────────────────────────────
+function Checklist() {
+  const {state,dispatch} = useApp()
+  const cm = state.month
+  const [y,mo] = cm.split('-').map(Number)
+
+  // Build items from registered data for this month
+  const items = useMemo(()=>{
+    const list = []
+    // Fixed incomes
+    state.incomes.filter(i=>!i.oneTime).forEach(i=>{
+      list.push({id:`inc-${i.id}`,refId:i.id,kind:'ingreso',label:i.description||i.category,amount:i.amount,icon:'💰'})
+    })
+    // One-time incomes this month
+    state.incomes.filter(i=>i.oneTime && i.date && i.date.startsWith(cm)).forEach(i=>{
+      list.push({id:`inc-${i.id}`,refId:i.id,kind:'ingreso',label:i.description||i.category,amount:i.amount,icon:'💰'})
+    })
+    // Fixed expenses (tipo fijo)
+    state.expenses.filter(e=>!e.oneTime && normType(e.type)==='fijo').forEach(e=>{
+      list.push({id:`exp-${e.id}`,refId:e.id,kind:'gasto',label:e.description||ELABELS[e.category]||e.category,amount:e.amount,icon:'📌'})
+    })
+    // Expenses registered this month (variable types)
+    state.expenses.filter(e=>e.date&&e.date.startsWith(cm)&&normType(e.type)!=='fijo').forEach(e=>{
+      const t=normType(e.type)
+      const ic=t==='falabella'?'🟣':t==='santander'?'🔴':'💵'
+      list.push({id:`exp-${e.id}`,refId:e.id,kind:'gasto',label:e.description||ELABELS[e.category]||e.category,amount:e.amount,icon:ic,typeLabel:ETLABELS[t]})
+    })
+    // Debts due this month
+    state.debts.filter(d=>{
+      if(!d.dueDate)return false
+      const [dy,dm]=d.dueDate.split('-').map(Number)
+      return dy===y&&dm===mo&&!d.paid
+    }).forEach(d=>{
+      list.push({id:`dbt-${d.id}`,refId:d.id,kind:'deuda',label:d.description,amount:d.amount,icon:'💳'})
+    })
+    // Active installments this month
+    state.installments.filter(inst=>{
+      if(inst.paid)return false
+      const start=inst.startDate?inst.startDate.substring(0,7):null
+      if(!start)return false
+      const [sy,sm]=start.split('-').map(Number)
+      const monthsSince=(y-sy)*12+(mo-sm)
+      return monthsSince>=0&&monthsSince<inst.installments
+    }).forEach(inst=>{
+      list.push({id:`inst-${inst.id}`,refId:inst.id,kind:'cuota',label:inst.description,amount:Math.round(inst.amount/inst.installments),icon:'📦'})
+    })
+    return list
+  },[state,cm,y,mo])
+
+  // Get checks for this month
+  const monthChecks = useMemo(()=>{
+    const map={}
+    state.checks.filter(c=>c.month===cm).forEach(c=>{map[c.refItemId]=c.checked})
+    return map
+  },[state.checks,cm])
+
+  async function toggle(item) {
+    const existing = state.checks.find(c=>c.month===cm&&c.refItemId===item.id)
+    if(existing) {
+      const updated={...existing,checked:!existing.checked}
+      await DB.put('checks',updated)
+      dispatch({type:'UPD_CHK',p:updated})
+    } else {
+      const rec={id:uid(),month:cm,refItemId:item.id,checked:true,createdAt:new Date().toISOString()}
+      await DB.put('checks',rec)
+      dispatch({type:'ADD_CHK',p:rec})
+    }
+  }
+
+  const ingresos=items.filter(i=>i.kind==='ingreso')
+  const gastos=items.filter(i=>i.kind!=='ingreso')
+  const total=items.length
+  const done=items.filter(i=>monthChecks[i.id]).length
+
+  function Section({title,list,color}){
+    if(!list.length)return null
+    return html`
+      <div class="slabel">${title}</div>
+      ${list.map(item=>{
+        const checked=!!monthChecks[item.id]
+        return html`
+          <div class="card" style="display:flex;align-items:center;gap:12px;padding:14px 16px;margin-bottom:8px;cursor:pointer;opacity:${checked?.7:1}" onClick=${()=>toggle(item)}>
+            <div style="width:32px;height:32px;border-radius:50%;border:2px solid ${checked?color:'var(--t3)'};background:${checked?color:'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:16px;color:#fff;transition:all .2s">
+              ${checked?'✓':''}
+            </div>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:14px;${checked?'text-decoration:line-through;color:var(--t3)':'color:var(--t)'}">${item.icon} ${item.label}</div>
+              ${item.typeLabel?html`<div style="font-size:11px;color:var(--t3)">${item.typeLabel}</div>`:''}
+            </div>
+            <div style="font-weight:700;font-size:15px;color:${checked?'var(--t3)':color}">${clp(item.amount)}</div>
+          </div>`
+      })}`
+  }
+
+  const pct=total>0?Math.round(done/total*100):0
+  return html`
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <div class="hdr">
+        <button class="back" onClick=${()=>dispatch({type:'SUB',p:null})}>‹ Volver</button>
+        <div style="flex:1;text-align:center"><div class="htitle" style="font-size:20px">✅ Checklist</div></div>
+        <div style="width:60px"></div>
+      </div>
+      <div class="page">
+        <div class="card" style="margin-bottom:8px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-weight:700">${done} de ${total} completados</div>
+            <div style="font-weight:800;font-size:18px;color:var(--a)">${pct}%</div>
+          </div>
+          <div style="height:8px;background:var(--c2);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:var(--a);border-radius:4px;transition:width .3s"></div>
+          </div>
+        </div>
+        ${total===0?html`<div class="card" style="text-align:center;padding:40px;color:var(--t3)">
+          <div style="font-size:40px;margin-bottom:8px">📋</div>
+          <div>No hay compromisos registrados para este mes.</div>
+          <div style="font-size:13px;margin-top:8px">Agrega ingresos, gastos fijos o deudas para verlos aquí.</div>
+        </div>`:''}
+        <${Section} title="💰 Ingresos esperados" list=${ingresos} color="var(--g)"/>
+        <${Section} title="💸 Gastos y compromisos" list=${gastos} color="var(--r)"/>
+      </div>
+    </div>`
+}
+
 function Calendario() {
   const {state,dispatch} = useApp()
   const today=new Date()
@@ -1537,6 +1706,22 @@ function Configuracion() {
             <div style="font-size:12px;color:var(--t3);margin-top:4px">Se recomienda ahorrar al menos el 20% de tus ingresos</div>
           </div>
         </div>
+        <div class="slabel">Límites y saldos</div>
+        <div class="card">
+          <div class="fg" style="margin-bottom:12px">
+            <label class="fl">🟣 Límite tarjeta Falabella</label>
+            <input class="inp" type="number" inputmode="numeric" min="0" value=${state.settings.limFalabella||''} placeholder="0" onInput=${e=>saveSetting({limFalabella:parseInt(e.target.value)||0})}/>
+          </div>
+          <div class="fg" style="margin-bottom:12px">
+            <label class="fl">🔴 Límite tarjeta Santander</label>
+            <input class="inp" type="number" inputmode="numeric" min="0" value=${state.settings.limSantander||''} placeholder="0" onInput=${e=>saveSetting({limSantander:parseInt(e.target.value)||0})}/>
+          </div>
+          <div class="fg">
+            <label class="fl">💵 Saldo efectivo disponible</label>
+            <input class="inp" type="number" inputmode="numeric" min="0" value=${state.settings.saldoEfectivo||''} placeholder="0" onInput=${e=>saveSetting({saldoEfectivo:parseInt(e.target.value)||0})}/>
+            <div style="font-size:12px;color:var(--t3);margin-top:4px">Base para descontar gastos en efectivo</div>
+          </div>
+        </div>
         <div class="slabel">Seguridad</div>
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center">
@@ -1587,6 +1772,7 @@ function Configuracion() {
 function Mas() {
   const {dispatch} = useApp()
   const MENU=[
+    {ic:'✅',lb:'Checklist mensual',sub:'Ingresos y gastos del mes',pg:'checklist',c:'#34C759'},
     {ic:'🤔',lb:'¿Puedo comprarlo?',sub:'Simulador de compras',pg:'simulador',c:'#007AFF'},
     {ic:'🏦',lb:'Estado de cuenta',sub:'Importar cartola o estado de tarjeta',pg:'estadocuenta',c:'#34C759'},
     {ic:'📊',lb:'Importar Excel',sub:'Cargar gastos desde planilla',pg:'importarexcel',c:'#FF9500'},
@@ -1971,6 +2157,7 @@ function Nav() {
 function AppContent() {
   const {state} = useApp()
   const {tab,subpage} = state
+  if(subpage==='checklist') return html`<${Checklist}/>`
   if(subpage==='simulador') return html`<${Simulador}/>`
   if(subpage==='especiales') return html`<${GastosEsp}/>`
   if(subpage==='calendario') return html`<${Calendario}/>`
