@@ -159,7 +159,7 @@ function idbReq(req) { return new Promise((res, rej) => { req.onsuccess = e => r
 let _db
 async function getDB() {
   if (_db) return _db
-  _db = await idbOpen('mis-finanzas', 2, (db, oldV) => {
+  _db = await idbOpen('mis-finanzas', 3, (db, oldV) => {
     if(oldV < 1) {
       ['incomes','expenses','goals','debts','installments','specials'].forEach(s => {
         const st = db.createObjectStore(s, { keyPath: 'id' })
@@ -170,11 +170,15 @@ async function getDB() {
     if(oldV < 2) {
       db.createObjectStore('checks', { keyPath: 'id' })
     }
+    if(oldV < 3) {
+      const ts = db.createObjectStore('transfers', { keyPath: 'id' })
+      ts.createIndex('by-date','date')
+    }
   })
   return _db
 }
 
-const DEFAULT_SETTINGS = { theme:'system', pin:'', monthlyGoalPct:20, limFalabella:0, limSantander:0, saldoEfectivo:0 }
+const DEFAULT_SETTINGS = { theme:'system', pin:'', monthlyGoalPct:20, bal_santander_cc:0, bal_mercadopago:0, bal_efectivo:0, lim_falabella_tc:0, lim_santander_tc:0 }
 const DB = {
   async getAll(store) {
     const db = await getDB()
@@ -198,16 +202,16 @@ const DB = {
     return idbReq(db.transaction('settings','readwrite').objectStore('settings').put(s,'main'))
   },
   async exportAll() {
-    const [incomes,expenses,goals,debts,installments,specials,settings] = await Promise.all([
+    const [incomes,expenses,goals,debts,installments,specials,transfers,settings] = await Promise.all([
       DB.getAll('incomes'),DB.getAll('expenses'),DB.getAll('goals'),
       DB.getAll('debts'),DB.getAll('installments'),DB.getAll('specials'),
-      DB.getSettings()
+      DB.getAll('transfers'),DB.getSettings()
     ])
-    return { incomes,expenses,goals,debts,installments,specials,settings, exportedAt: new Date().toISOString() }
+    return { incomes,expenses,goals,debts,installments,specials,transfers,settings, exportedAt: new Date().toISOString() }
   },
   async importAll(data) {
     const db = await getDB()
-    const stores = ['incomes','expenses','goals','debts','installments','specials']
+    const stores = ['incomes','expenses','goals','debts','installments','specials','transfers']
     const tx = db.transaction([...stores,'settings'],'readwrite')
     const reqs = [
       ...stores.flatMap(s => (data[s]||[]).map(i => tx.objectStore(s).put(i))),
@@ -233,9 +237,19 @@ const next6 = () => { const ms=[]; const n=new Date(); for(let i=0;i<6;i++){ con
 
 const ILABELS = {sueldo:'💼 Sueldo',adicional:'➕ Adicional',bono:'🎁 Bono',freelance:'💻 Freelance',arriendo:'🏠 Arriendo',otro:'💵 Otro'}
 const ELABELS = {vivienda:'🏠 Vivienda',alimentacion:'🍽 Alimentación',transporte:'🚌 Transporte',salud:'💊 Salud',educacion:'📚 Educación',entretenimiento:'🎬 Entret.',ropa:'👗 Ropa',servicios:'⚡ Servicios',vehiculo:'🚗 Vehículo',mascotas:'🐾 Mascotas',hormiga:'☕ Hormiga',metas:'🎯 Metas',otro:'📦 Otro'}
-const ETLABELS = {fijo:'📌 Fijo',falabella:'🟣 Falabella',santander:'🔴 Santander',efectivo:'💵 Efectivo'}
-const ETCOMPAT = {variable:'falabella',hormiga:'efectivo'} // backward compat
-const ETCOLOR = {fijo:'var(--a)',falabella:'#7B2D8B',santander:'#CC0000',efectivo:'var(--g)'}
+const INST = {
+  santander_cc: {label:'🏦 Santander CC', color:'#CC0000',   kind:'cuenta'},
+  mercadopago:  {label:'💙 Mercado Pago',  color:'#009EE3',  kind:'cuenta'},
+  efectivo:     {label:'💵 Efectivo',       color:'#34C759',  kind:'cuenta'},
+  falabella_tc: {label:'🟣 Falabella TC',   color:'#7B2D8B',  kind:'tarjeta'},
+  santander_tc: {label:'🔴 Santander TC',   color:'#FF3B30',  kind:'tarjeta'},
+}
+// backward compat: mapea tipos viejos al nuevo instrumento
+const INSTCOMPAT = {fijo:'santander_cc',falabella:'falabella_tc',santander:'santander_tc',efectivo:'efectivo',variable:'falabella_tc',hormiga:'efectivo'}
+const normInst = t => INSTCOMPAT[t]||t||'santander_cc'
+// legacy aliases para no romper código existente
+const ETLABELS = Object.fromEntries(Object.entries(INST).map(([k,v])=>[k,v.label]))
+const ETCOLOR  = Object.fromEntries(Object.entries(INST).map(([k,v])=>[k,v.color]))
 const DTLABELS = {tarjeta:'💳 Tarjeta',credito_consumo:'🏦 Consumo',prestamo:'🤝 Préstamo',hipoteca:'🏠 Hipoteca',otro:'📋 Otro'}
 const SCLABELS = {vehiculo:'🚗 Vehículo',moto:'🏍️ Moto',hidrogeno:'⚡ Hidrógeno',salud:'💊 Salud',educacion:'📚 Educación',hogar:'🏠 Hogar',viaje:'✈️ Viaje',otro:'📋 Otro'}
 const SC_TO_CAT = {vehiculo:'transporte',moto:'transporte',hidrogeno:'servicios',salud:'salud',educacion:'educacion',hogar:'hogar',viaje:'transporte',otro:'otros'}
@@ -246,7 +260,7 @@ const GCOLS = ['#007AFF','#34C759','#FF9500','#FF3B30','#AF52DE','#5856D6','#FF2
 // ── Context & State ──────────────────────────────────────────────────────────
 const Ctx = createContext(null)
 const initState = {
-  incomes:[], expenses:[], goals:[], debts:[], installments:[], specials:[], checks:[],
+  incomes:[], expenses:[], goals:[], debts:[], installments:[], specials:[], checks:[], transfers:[],
   settings: DEFAULT_SETTINGS, loading:true,
   tab:'dashboard', subpage:null, month: curMonth()
 }
@@ -278,6 +292,9 @@ function reducer(s, a) {
     case 'ADD_CHK': return {...s,checks:[...s.checks,a.p]}
     case 'UPD_CHK': return {...s,checks:s.checks.map(x=>x.id===a.p.id?a.p:x)}
     case 'DEL_CHK': return {...s,checks:s.checks.filter(x=>x.id!==a.p)}
+    case 'ADD_T': return {...s,transfers:[...s.transfers,a.p]}
+    case 'UPD_T': return {...s,transfers:s.transfers.map(x=>x.id===a.p.id?a.p:x)}
+    case 'DEL_T': return {...s,transfers:s.transfers.filter(x=>x.id!==a.p)}
     case 'SETTINGS': return {...s,settings:{...s.settings,...a.p}}
     default: return s
   }
@@ -287,12 +304,12 @@ function Provider({children}) {
   const [state,dispatch] = useReducer(reducer,initState)
   useEffect(()=>{
     (async()=>{
-      const [incomes,expenses,goals,debts,installments,specials,checks,settings] = await Promise.all([
+      const [incomes,expenses,goals,debts,installments,specials,checks,transfers,settings] = await Promise.all([
         DB.getAll('incomes'),DB.getAll('expenses'),DB.getAll('goals'),
         DB.getAll('debts'),DB.getAll('installments'),DB.getAll('specials'),
-        DB.getAll('checks'),DB.getSettings()
+        DB.getAll('checks'),DB.getAll('transfers'),DB.getSettings()
       ])
-      const loaded={incomes,expenses,goals,debts,installments,specials,checks,settings}
+      const loaded={incomes,expenses,goals,debts,installments,specials,checks,transfers,settings}
       dispatch({type:'LOAD',p:loaded})
       dispararNotifHoy(loaded)
     })()
@@ -433,6 +450,43 @@ function Dashboard() {
           ${[['💰 Ingresos',clp(mi),'g'],['💸 Gastos totales',clp(me+md+mi2),'r'],['💵 Saldo del mes',clp(avail),avail>=0?'g':'r'],['💾 Saldo acumulado',clp(saldoAcum),saldoAcum>=0?'g':'r']].map(([l,v,c])=>html`
             <div class="card"><div class="slbl">${l}</div><div class="sval ${c}">${v}</div></div>`)}
         </div>
+        ${(()=>{
+          const s=state.settings
+          const cuentas=[
+            {k:'santander_cc',bal:s.bal_santander_cc},
+            {k:'mercadopago',bal:s.bal_mercadopago},
+            {k:'efectivo',bal:s.bal_efectivo},
+          ].filter(c=>c.bal>0)
+          const tarjetas=[
+            {k:'falabella_tc',lim:s.lim_falabella_tc,usado:expenses.filter(e=>inMonth(e.date,month)&&normInst(e.type||e.instrument)==='falabella_tc').reduce((a,e)=>a+e.amount,0)},
+            {k:'santander_tc',lim:s.lim_santander_tc,usado:expenses.filter(e=>inMonth(e.date,month)&&normInst(e.type||e.instrument)==='santander_tc').reduce((a,e)=>a+e.amount,0)},
+          ].filter(c=>c.lim>0)
+          if(!cuentas.length&&!tarjetas.length) return null
+          return html`
+            <div class="card" style="margin-top:10px">
+              <div class="slabel" style="margin-top:0">🏦 Fondos y tarjetas</div>
+              ${cuentas.length>0&&html`
+                <div style="font-size:11px;font-weight:700;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Cuentas</div>
+                ${cuentas.map(({k,bal})=>html`
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--sep)">
+                    <div style="font-weight:600;font-size:14px">${INST[k].label}</div>
+                    <div style="font-weight:800;font-size:15px;color:${INST[k].color}">${clp(bal)}</div>
+                  </div>`)}`}
+              ${tarjetas.length>0&&html`
+                <div style="font-size:11px;font-weight:700;color:var(--t3);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.5px">Tarjetas de crédito</div>
+                ${tarjetas.map(({k,lim,usado})=>{const disp=lim-usado;const pp=Math.min(100,Math.round(usado/lim*100));return html`
+                  <div style="padding:8px 0;border-bottom:1px solid var(--sep)">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                      <div style="font-weight:600;font-size:14px">${INST[k].label}</div>
+                      <div style="font-size:13px;color:var(--t3)">Disp: <b style="color:${disp<0?'var(--r)':INST[k].color}">${clp(disp)}</b></div>
+                    </div>
+                    <div style="height:5px;background:var(--c2);border-radius:3px;overflow:hidden">
+                      <div style="height:100%;width:${pp}%;background:${INST[k].color};border-radius:3px"></div>
+                    </div>
+                    <div style="font-size:11px;color:var(--t3);margin-top:3px">${clp(usado)} usado de ${clp(lim)}</div>
+                  </div>`})}
+            </div>`
+        })()}
         ${goals.length>0&&(()=>{const totalAh=goals.reduce((s,g)=>s+g.currentAmount,0);const totalObj=goals.reduce((s,g)=>s+g.targetAmount,0);return html`
           <div class="card" style="margin-top:10px;background:linear-gradient(135deg,#34C759,#30D158);color:#fff">
             <div style="display:flex;justify-content:space-between;align-items:center">
@@ -486,15 +540,17 @@ function Dashboard() {
 // ── Ingresos ─────────────────────────────────────────────────────────────────
 function IncomeForm({initial,onSave}) {
   const [cat,setCat] = useState(initial?.category??'sueldo')
+  const [account,setAccount] = useState(initial?.account??'santander_cc')
   const [amt,setAmt] = useState(initial?.amount?String(initial.amount):'')
   const [desc,setDesc] = useState(initial?.description??'')
   const [date,setDate] = useState(initial?.date??todayISO())
   const [notes,setNotes] = useState(initial?.notes??'')
   const [meses,setMeses] = useState('1')
   const mesesN = parseInt(meses)||1
+  const ACCS = ['santander_cc','mercadopago','efectivo']
   function save(){
     const a=parseFloat(amt)||0; if(!a||!desc) return
-    const base={category:cat,amount:a,description:desc,notes:notes||undefined,createdAt:new Date().toISOString()}
+    const base={category:cat,account,amount:a,description:desc,notes:notes||undefined,createdAt:new Date().toISOString()}
     if(initial){onSave({id:initial.id,...base,date});return}
     const d=new Date(date+'T12:00:00')
     const items=[]
@@ -505,6 +561,14 @@ function IncomeForm({initial,onSave}) {
     onSave(mesesN>1?items:items[0])
   }
   return html`
+    <div class="fg"><label class="fl">Entra en</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+        ${ACCS.map(k=>html`
+          <button onClick=${()=>setAccount(k)} style="flex:1;padding:10px 8px;border-radius:12px;border:2px solid ${account===k?INST[k].color:'var(--sep)'};background:${account===k?INST[k].color+'18':'var(--s)'};cursor:pointer;text-align:center;min-width:90px">
+            <div style="font-weight:700;font-size:13px;color:${account===k?INST[k].color:'var(--t)'}">${INST[k].label}</div>
+          </button>`)}
+      </div>
+    </div>
     <div class="fg"><label class="fl">Categoría</label>
       <div class="pills">${Object.entries(ILABELS).map(([v,l])=>html`<button class="pill ${cat===v?'on':''}" onClick=${()=>setCat(v)}>${l}</button>`)}</div>
     </div>
@@ -565,14 +629,14 @@ function Ingresos() {
     </div>`
 }
 
-// helper: normaliza tipos viejos
-const normType = t => ETCOMPAT[t]||t||'falabella'
+// helper: normaliza instrumento (backward compat)
+const normType = normInst
 
 // ── Gastos ────────────────────────────────────────────────────────────────────
 function ExpenseForm({initial,onSave}) {
   const {state} = useApp()
   const [cat,setCat] = useState(initial?.category??'alimentacion')
-  const [type,setType] = useState(normType(initial?.type??'falabella'))
+  const [inst,setInst] = useState(normInst(initial?.type??initial?.instrument??'santander_cc'))
   const [amt,setAmt] = useState(initial?.amount?String(initial.amount):'')
   const [desc,setDesc] = useState(initial?.description??'')
   const [date,setDate] = useState(initial?.date??todayISO())
@@ -580,19 +644,31 @@ function ExpenseForm({initial,onSave}) {
   const [meses,setMeses] = useState('1')
   const mesesN = parseInt(meses)||1
   const cm = curMonth()
-  // saldo disponible por tipo en el mes actual
+  const s = state.settings
+  // gasto acumulado por instrumento este mes
   const usadoMes = useMemo(()=>{
-    const r={falabella:0,santander:0,efectivo:0}
-    state.expenses.filter(e=>inMonth(e.date,cm)).forEach(e=>{const t=normType(e.type);if(r[t]!==undefined)r[t]+=e.amount})
+    const r=Object.fromEntries(Object.keys(INST).map(k=>[k,0]))
+    state.expenses.filter(e=>inMonth(e.date,cm)).forEach(e=>{const t=normInst(e.type||e.instrument);if(r[t]!==undefined)r[t]+=e.amount})
     return r
   },[state.expenses,cm])
-  const dispFalabella = (state.settings.limFalabella||0) - usadoMes.falabella
-  const dispSantander = (state.settings.limSantander||0) - usadoMes.santander
-  const dispEfectivo  = (state.settings.saldoEfectivo||0) - usadoMes.efectivo
-
+  // disponible por instrumento
+  const DISP = {
+    santander_cc: s.bal_santander_cc>0?s.bal_santander_cc-usadoMes.santander_cc:null,
+    mercadopago:  s.bal_mercadopago>0?s.bal_mercadopago-usadoMes.mercadopago:null,
+    efectivo:     s.bal_efectivo>0?s.bal_efectivo-usadoMes.efectivo:null,
+    falabella_tc: s.lim_falabella_tc>0?s.lim_falabella_tc-usadoMes.falabella_tc:null,
+    santander_tc: s.lim_santander_tc>0?s.lim_santander_tc-usadoMes.santander_tc:null,
+  }
+  const IDESC = {
+    santander_cc:'Cuenta corriente Santander',
+    mercadopago:'Cuenta Mercado Pago',
+    efectivo:'Dinero en efectivo',
+    falabella_tc:'Tarjeta de crédito Falabella',
+    santander_tc:'Tarjeta de crédito Santander',
+  }
   function save(){
     const a=parseFloat(amt)||0;if(!a||!desc)return
-    const base={category:cat,type,amount:a,description:desc,notes:notes||undefined,createdAt:new Date().toISOString()}
+    const base={category:cat,instrument:inst,type:inst,amount:a,description:desc,notes:notes||undefined,createdAt:new Date().toISOString()}
     if(initial){onSave({id:initial.id,...base,date});return}
     const d=new Date(date+'T12:00:00')
     const items=[]
@@ -602,21 +678,29 @@ function ExpenseForm({initial,onSave}) {
     }
     onSave(mesesN>1?items:items[0])
   }
-  const TINFO = {
-    fijo:{desc:'Gastos que se repiten iguales cada mes',disp:null},
-    falabella:{desc:'Compras con tarjeta Falabella',disp:state.settings.limFalabella>0?`Disponible: ${clp(dispFalabella)}`:null},
-    santander:{desc:'Compras con tarjeta Santander',disp:state.settings.limSantander>0?`Disponible: ${clp(dispSantander)}`:null},
-    efectivo:{desc:'Gastos pagados en efectivo',disp:state.settings.saldoEfectivo>0?`Disponible: ${clp(dispEfectivo)}`:null},
+  const cuentas = ['santander_cc','mercadopago','efectivo']
+  const tarjetas = ['falabella_tc','santander_tc']
+  function InstBtn({k}){
+    const sel=inst===k
+    const col=INST[k].color
+    return html`
+      <button onClick=${()=>setInst(k)} style="padding:9px 8px;border-radius:12px;border:2px solid ${sel?col:'var(--sep)'};background:${sel?col+'18':'var(--s)'};cursor:pointer;text-align:left;width:100%">
+        <div style="font-weight:700;font-size:12px;color:${sel?col:'var(--t)'}">${INST[k].label}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:1px">${IDESC[k]}</div>
+        ${DISP[k]!==null?html`<div style="font-size:10px;font-weight:700;color:${DISP[k]<0?'var(--r)':col};margin-top:2px">Disp: ${clp(DISP[k])}</div>`:''}
+      </button>`
   }
   return html`
-    <div class="fg"><label class="fl">Tipo de gasto</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
-        ${Object.entries(ETLABELS).map(([v,l])=>html`
-          <button onClick=${()=>setType(v)} style="padding:10px;border-radius:12px;border:2px solid ${type===v?ETCOLOR[v]:'var(--sep)'};background:${type===v?ETCOLOR[v]+'18':'var(--s)'};cursor:pointer;text-align:left">
-            <div style="font-weight:700;color:${type===v?ETCOLOR[v]:'var(--t)'}">${l}</div>
-            <div style="font-size:11px;color:var(--t3);margin-top:2px">${TINFO[v].desc}</div>
-            ${TINFO[v].disp&&html`<div style="font-size:11px;font-weight:700;color:${ETCOLOR[v]};margin-top:2px">${TINFO[v].disp}</div>`}
-          </button>`)}
+    <div class="fg"><label class="fl">Sale de / se carga a</label>
+      <div style="margin-top:6px">
+        <div style="font-size:11px;font-weight:700;color:var(--t3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Cuentas</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">
+          ${cuentas.map(k=>html`<${InstBtn} k=${k}/>`)}
+        </div>
+        <div style="font-size:11px;font-weight:700;color:var(--t3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Tarjetas de crédito</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${tarjetas.map(k=>html`<${InstBtn} k=${k}/>`)}
+        </div>
       </div>
     </div>
     <div class="fg"><label class="fl">Categoría</label>
@@ -643,13 +727,13 @@ function Gastos() {
   const [filt,setFilt] = useState('todos')
   const [showDebts,setShowDebts] = useState(true)
   const items = useMemo(()=>state.expenses.filter(e=>inMonth(e.date,state.month)).sort((a,b)=>b.date.localeCompare(a.date)),[state.expenses,state.month])
-  const shown = useMemo(()=>filt==='todos'?items:items.filter(e=>e.type===filt),[items,filt])
+  const shown = useMemo(()=>filt==='todos'?items:items.filter(e=>normInst(e.type||e.instrument)===filt),[items,filt])
   const totalExp = useMemo(()=>items.reduce((s,e)=>s+e.amount,0),[items])
   const totalDeudas = useMemo(()=>state.debts.reduce((s,d)=>s+d.monthlyPayment,0),[state.debts])
   const total = totalExp + (showDebts?totalDeudas:0)
   const byType = useMemo(()=>{
-    const r={fijo:0,falabella:0,santander:0,efectivo:0}
-    items.forEach(e=>{const t=normType(e.type);if(r[t]!==undefined)r[t]+=e.amount})
+    const r=Object.fromEntries(Object.keys(INST).map(k=>[k,0]))
+    items.forEach(e=>{const t=normInst(e.type||e.instrument);if(r[t]!==undefined)r[t]+=e.amount})
     return r
   },[items])
   async function save(item){
@@ -666,16 +750,28 @@ function Gastos() {
       </div>
       <div class="page">
         <${MonthNav} value=${state.month} onChange=${m=>dispatch({type:'MONTH',p:m})}/>
-        <div class="grid2" style="margin-top:10px">
-          ${[['📌 Fijos',byType.fijo,null,null],['🟣 Falabella',byType.falabella,state.settings.limFalabella,'#7B2D8B'],['🔴 Santander',byType.santander,state.settings.limSantander,'#CC0000'],['💵 Efectivo',byType.efectivo,state.settings.saldoEfectivo,'var(--g)']].map(([l,v,lim,col])=>html`
-            <div class="card" style="${col?`border-top:3px solid ${col}`:``}">
-              <div class="slbl">${l}</div>
-              <div class="sval r">${clp(v)}</div>
-              ${lim>0?html`<div style="font-size:11px;margin-top:4px;color:${(lim-v)<0?'var(--r)':'var(--t3)'}">Disp: <b style="color:${(lim-v)<0?'var(--r)':col||'var(--g)'}">${clp(lim-v)}</b></div>`:''}
-            </div>`)}
+        <div style="margin-top:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Cuentas</div>
+          <div class="grid3" style="margin-bottom:10px">
+            ${['santander_cc','mercadopago','efectivo'].map(k=>{const s=state.settings;const lim=k==='santander_cc'?s.bal_santander_cc:k==='mercadopago'?s.bal_mercadopago:s.bal_efectivo;const v=byType[k];const col=INST[k].color;return html`
+              <div class="card" style="border-top:3px solid ${col};padding:10px">
+                <div style="font-size:10px;font-weight:700;color:${col}">${INST[k].label}</div>
+                <div style="font-weight:800;font-size:15px;color:var(--r);margin-top:2px">${clp(v)}</div>
+                ${lim>0?html`<div style="font-size:10px;margin-top:3px;color:${(lim-v)<0?'var(--r)':'var(--t3)'}">Disp: <b style="color:${(lim-v)<0?'var(--r)':col}">${clp(lim-v)}</b></div>`:''}
+              </div>`})}
+          </div>
+          <div style="font-size:11px;font-weight:700;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Tarjetas de crédito</div>
+          <div class="grid2" style="margin-bottom:10px">
+            ${['falabella_tc','santander_tc'].map(k=>{const s=state.settings;const lim=k==='falabella_tc'?s.lim_falabella_tc:s.lim_santander_tc;const v=byType[k];const col=INST[k].color;return html`
+              <div class="card" style="border-top:3px solid ${col};padding:10px">
+                <div style="font-size:10px;font-weight:700;color:${col}">${INST[k].label}</div>
+                <div style="font-weight:800;font-size:15px;color:var(--r);margin-top:2px">${clp(v)}</div>
+                ${lim>0?html`<div style="font-size:10px;margin-top:3px;color:${(lim-v)<0?'var(--r)':'var(--t3)'}">Disp: <b style="color:${(lim-v)<0?'var(--r)':col}">${clp(lim-v)}</b></div>`:''}
+              </div>`})}
+          </div>
         </div>
-        <div class="pills" style="margin-top:10px">
-          ${[['todos','Todos'],...Object.entries(ETLABELS)].map(([v,l])=>html`<button class="pill ${filt===v?'on':''}" onClick=${()=>setFilt(v)}>${l}</button>`)}
+        <div class="pills" style="margin-top:4px">
+          ${[['todos','Todos'],...Object.keys(INST).map(k=>[k,INST[k].label])].map(([v,l])=>html`<button class="pill ${filt===v?'on':''}" onClick=${()=>setFilt(v)}>${l}</button>`)}
         </div>
         ${shown.length===0&&!state.debts.length?html`
           <div class="empty"><div style="font-size:48px">💸</div><b style="font-size:18px">Sin gastos</b>
@@ -687,7 +783,7 @@ function Gastos() {
                 <div class="lic" style="background:var(--rl)">${ELABELS[e.category]?.split(' ')[0]}</div>
                 <div class="lcd">
                   <div class="ltt">${e.description}</div>
-                  <div class="lsb">${ELABELS[e.category]?.replace(/^.\s/,'')} · ${fdate(e.date)} <span class="badge" style="font-size:10px;padding:1px 5px;background:${ETCOLOR[normType(e.type)]}22;color:${ETCOLOR[normType(e.type)]}">${ETLABELS[normType(e.type)]||e.type}</span></div>
+                  <div class="lsb">${ELABELS[e.category]?.replace(/^.\s/,'')} · ${fdate(e.date)} <span class="badge" style="font-size:10px;padding:1px 5px;background:${INST[normInst(e.type||e.instrument)]?.color??'var(--a)'}22;color:${INST[normInst(e.type||e.instrument)]?.color??'var(--a)'}">${INST[normInst(e.type||e.instrument)]?.label??e.type}</span></div>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px">
                   <span class="lam neg">${clp(e.amount)}</span>
@@ -1706,21 +1802,23 @@ function Configuracion() {
             <div style="font-size:12px;color:var(--t3);margin-top:4px">Se recomienda ahorrar al menos el 20% de tus ingresos</div>
           </div>
         </div>
-        <div class="slabel">Límites y saldos</div>
+        <div class="slabel">Saldos de cuentas</div>
         <div class="card">
-          <div class="fg" style="margin-bottom:12px">
-            <label class="fl">🟣 Límite tarjeta Falabella</label>
-            <input class="inp" type="number" inputmode="numeric" min="0" value=${state.settings.limFalabella||''} placeholder="0" onInput=${e=>saveSetting({limFalabella:parseInt(e.target.value)||0})}/>
-          </div>
-          <div class="fg" style="margin-bottom:12px">
-            <label class="fl">🔴 Límite tarjeta Santander</label>
-            <input class="inp" type="number" inputmode="numeric" min="0" value=${state.settings.limSantander||''} placeholder="0" onInput=${e=>saveSetting({limSantander:parseInt(e.target.value)||0})}/>
-          </div>
-          <div class="fg">
-            <label class="fl">💵 Saldo efectivo disponible</label>
-            <input class="inp" type="number" inputmode="numeric" min="0" value=${state.settings.saldoEfectivo||''} placeholder="0" onInput=${e=>saveSetting({saldoEfectivo:parseInt(e.target.value)||0})}/>
-            <div style="font-size:12px;color:var(--t3);margin-top:4px">Base para descontar gastos en efectivo</div>
-          </div>
+          <div style="font-size:12px;color:var(--t3);margin-bottom:12px">Ingresa el saldo actual de cada cuenta para calcular disponibles</div>
+          ${[['bal_santander_cc','🏦 Santander CC'],['bal_mercadopago','💙 Mercado Pago'],['bal_efectivo','💵 Efectivo']].map(([k,l])=>html`
+            <div class="fg" style="margin-bottom:12px">
+              <label class="fl">${l}</label>
+              <div class="awrap"><span class="apfx">$</span><input class="inp ainp" type="number" inputmode="numeric" min="0" value=${state.settings[k]||''} placeholder="0" onInput=${e=>saveSetting({[k]:parseInt(e.target.value)||0})}/></div>
+            </div>`)}
+        </div>
+        <div class="slabel">Límites de tarjetas</div>
+        <div class="card">
+          <div style="font-size:12px;color:var(--t3);margin-bottom:12px">Límite de crédito de cada tarjeta</div>
+          ${[['lim_falabella_tc','🟣 Falabella TC'],['lim_santander_tc','🔴 Santander TC']].map(([k,l])=>html`
+            <div class="fg" style="margin-bottom:12px">
+              <label class="fl">${l}</label>
+              <div class="awrap"><span class="apfx">$</span><input class="inp ainp" type="number" inputmode="numeric" min="0" value=${state.settings[k]||''} placeholder="0" onInput=${e=>saveSetting({[k]:parseInt(e.target.value)||0})}/></div>
+            </div>`)}
         </div>
         <div class="slabel">Seguridad</div>
         <div class="card">
@@ -1768,11 +1866,97 @@ function Configuracion() {
     </div>`
 }
 
+// ── Transferencias ────────────────────────────────────────────────────────────
+function Transferencias() {
+  const {state,dispatch} = useApp()
+  const [open,setOpen] = useState(false)
+  const [from,setFrom] = useState('santander_cc')
+  const [to,setTo] = useState('mercadopago')
+  const [amt,setAmt] = useState('')
+  const [desc,setDesc] = useState('')
+  const [date,setDate] = useState(todayISO())
+  const cm = state.month
+  const items = useMemo(()=>[...state.transfers].filter(t=>t.date?.startsWith(cm)).sort((a,b)=>b.date.localeCompare(a.date)),[state.transfers,cm])
+  const FUNDS = Object.keys(INST)
+  async function save(){
+    const a=parseFloat(amt)||0;if(!a)return
+    const rec={id:uid(),from,to,amount:a,description:desc||`${INST[from].label} → ${INST[to].label}`,date,createdAt:new Date().toISOString()}
+    await DB.put('transfers',rec)
+    dispatch({type:'ADD_T',p:rec})
+    setOpen(false);setAmt('');setDesc('')
+  }
+  async function del(id){if(!confirm('¿Eliminar?'))return;await DB.del('transfers',id);dispatch({type:'DEL_T',p:id})}
+  return html`
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <div class="hdr">
+        <button class="back" onClick=${()=>dispatch({type:'SUB',p:null})}>‹ Volver</button>
+        <div style="flex:1;text-align:center"><div class="htitle" style="font-size:20px">🔄 Transferencias</div></div>
+        <button class="btn bg bsm" onClick=${()=>setOpen(!open)}>+ Nueva</button>
+      </div>
+      <div class="page">
+        <${MonthNav} value=${cm} onChange=${m=>dispatch({type:'MONTH',p:m})}/>
+        ${open&&html`
+          <div class="card" style="margin-top:12px">
+            <div class="slabel" style="margin-top:0">Nueva transferencia</div>
+            <div class="fg">
+              <label class="fl">Desde</label>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+                ${FUNDS.map(k=>html`<button onClick=${()=>{setFrom(k);if(k===to)setTo(FUNDS.find(f=>f!==k))}} style="flex:1;min-width:80px;padding:8px 4px;border-radius:10px;border:2px solid ${from===k?INST[k].color:'var(--sep)'};background:${from===k?INST[k].color+'18':'var(--s)'};cursor:pointer;font-size:12px;font-weight:700;color:${from===k?INST[k].color:'var(--t)'}">${INST[k].label}</button>`)}
+              </div>
+            </div>
+            <div style="text-align:center;font-size:22px;margin:4px 0">↓</div>
+            <div class="fg">
+              <label class="fl">Hacia</label>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+                ${FUNDS.filter(k=>k!==from).map(k=>html`<button onClick=${()=>setTo(k)} style="flex:1;min-width:80px;padding:8px 4px;border-radius:10px;border:2px solid ${to===k?INST[k].color:'var(--sep)'};background:${to===k?INST[k].color+'18':'var(--s)'};cursor:pointer;font-size:12px;font-weight:700;color:${to===k?INST[k].color:'var(--t)'}">${INST[k].label}</button>`)}
+              </div>
+            </div>
+            <div class="fg">
+              <label class="fl">Monto</label>
+              <div class="awrap"><span class="apfx">$</span><input class="inp ainp" type="number" inputmode="numeric" placeholder="0" value=${amt} onInput=${e=>setAmt(e.target.value)}/></div>
+            </div>
+            <div class="fg">
+              <label class="fl">Descripción (opcional)</label>
+              <input class="inp" placeholder="Ej: Pago tarjeta Falabella" value=${desc} onInput=${e=>setDesc(e.target.value)}/>
+            </div>
+            <div class="fg"><label class="fl">Fecha</label><input class="inp" type="date" value=${date} onInput=${e=>setDate(e.target.value)}/></div>
+            <button class="btn bg bfull" onClick=${save}>+ Registrar transferencia</button>
+          </div>`}
+        ${items.length===0?html`
+          <div class="empty" style="margin-top:40px">
+            <div style="font-size:48px">🔄</div>
+            <b style="font-size:18px">Sin transferencias</b>
+            <span style="color:var(--t3)">Registra movimientos entre cuentas y tarjetas</span>
+          </div>`:html`
+          <div class="card" style="margin-top:12px">
+            ${items.map(t=>html`
+              <div class="li">
+                <div style="width:40px;height:40px;border-radius:12px;background:var(--c2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🔄</div>
+                <div class="lcd">
+                  <div class="ltt">${t.description}</div>
+                  <div class="lsb" style="display:flex;align-items:center;gap:4px">
+                    <span style="color:${INST[t.from]?.color}">${INST[t.from]?.label??t.from}</span>
+                    <span>→</span>
+                    <span style="color:${INST[t.to]?.color}">${INST[t.to]?.label??t.to}</span>
+                    · ${fdate(t.date)}
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span class="lam" style="color:var(--a)">${clp(t.amount)}</span>
+                  <button class="btn bico" style="width:32px;height:32px;font-size:13px;background:var(--rl);color:var(--r)" onClick=${()=>del(t.id)}>🗑</button>
+                </div>
+              </div>`)}
+          </div>`}
+      </div>
+    </div>`
+}
+
 // ── Más opciones ──────────────────────────────────────────────────────────────
 function Mas() {
   const {dispatch} = useApp()
   const MENU=[
     {ic:'✅',lb:'Checklist mensual',sub:'Ingresos y gastos del mes',pg:'checklist',c:'#34C759'},
+    {ic:'🔄',lb:'Transferencias',sub:'Mover dinero entre cuentas y tarjetas',pg:'transferencias',c:'#5856D6'},
     {ic:'🤔',lb:'¿Puedo comprarlo?',sub:'Simulador de compras',pg:'simulador',c:'#007AFF'},
     {ic:'🏦',lb:'Estado de cuenta',sub:'Importar cartola o estado de tarjeta',pg:'estadocuenta',c:'#34C759'},
     {ic:'📊',lb:'Importar Excel',sub:'Cargar gastos desde planilla',pg:'importarexcel',c:'#FF9500'},
@@ -2158,6 +2342,7 @@ function AppContent() {
   const {state} = useApp()
   const {tab,subpage} = state
   if(subpage==='checklist') return html`<${Checklist}/>`
+  if(subpage==='transferencias') return html`<${Transferencias}/>`
   if(subpage==='simulador') return html`<${Simulador}/>`
   if(subpage==='especiales') return html`<${GastosEsp}/>`
   if(subpage==='calendario') return html`<${Calendario}/>`
