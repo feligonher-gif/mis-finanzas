@@ -359,6 +359,46 @@ function MonthNav({value,onChange}) {
     </div>`
 }
 
+function FondosTarjetas({settings, expenses, month}) {
+  const s = settings
+  const cuentas = [
+    {k:'santander_cc', bal:s.bal_santander_cc||0},
+    {k:'mercadopago',  bal:s.bal_mercadopago||0},
+    {k:'efectivo',     bal:s.bal_efectivo||0},
+  ].filter(c=>c.bal>0)
+  const tarjetas = [
+    {k:'falabella_tc', lim:s.lim_falabella_tc||0, usado:expenses.filter(e=>inMonth(e.date,month)&&normInst(e.type||e.instrument)==='falabella_tc').reduce((a,e)=>a+e.amount,0)},
+    {k:'santander_tc', lim:s.lim_santander_tc||0, usado:expenses.filter(e=>inMonth(e.date,month)&&normInst(e.type||e.instrument)==='santander_tc').reduce((a,e)=>a+e.amount,0)},
+  ].filter(c=>c.lim>0)
+  if(!cuentas.length && !tarjetas.length) return null
+  return html`
+    <div class="card" style="margin-top:10px">
+      <div class="slabel" style="margin-top:0">🏦 Fondos y tarjetas</div>
+      ${cuentas.length>0 && html`<div style="font-size:11px;font-weight:700;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Cuentas</div>`}
+      ${cuentas.map(({k,bal})=>html`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--sep)">
+          <div style="font-weight:600;font-size:14px">${INST[k].label}</div>
+          <div style="font-weight:800;font-size:15px;color:${INST[k].color}">${clp(bal)}</div>
+        </div>`)}
+      ${tarjetas.length>0 && html`<div style="font-size:11px;font-weight:700;color:var(--t3);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.5px">Tarjetas de crédito</div>`}
+      ${tarjetas.map(({k,lim,usado})=>{
+        const disp=lim-usado
+        const pp=Math.min(100,Math.round(usado/lim*100))
+        return html`
+          <div style="padding:8px 0;border-bottom:1px solid var(--sep)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <div style="font-weight:600;font-size:14px">${INST[k].label}</div>
+              <div style="font-size:13px;color:var(--t3)">Disp: <b style="color:${disp<0?'var(--r)':INST[k].color}">${clp(disp)}</b></div>
+            </div>
+            <div style="height:5px;background:var(--c2);border-radius:3px;overflow:hidden">
+              <div style="height:100%;width:${pp}%;background:${INST[k].color};border-radius:3px"></div>
+            </div>
+            <div style="font-size:11px;color:var(--t3);margin-top:3px">${clp(usado)} usado de ${clp(lim)}</div>
+          </div>`
+      })}
+    </div>`
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 function Dashboard() {
   const {state,dispatch} = useApp()
@@ -450,43 +490,7 @@ function Dashboard() {
           ${[['💰 Ingresos',clp(mi),'g'],['💸 Gastos totales',clp(me+md+mi2),'r'],['💵 Saldo del mes',clp(avail),avail>=0?'g':'r'],['💾 Saldo acumulado',clp(saldoAcum),saldoAcum>=0?'g':'r']].map(([l,v,c])=>html`
             <div class="card"><div class="slbl">${l}</div><div class="sval ${c}">${v}</div></div>`)}
         </div>
-        ${(()=>{
-          const s=state.settings
-          const cuentas=[
-            {k:'santander_cc',bal:s.bal_santander_cc},
-            {k:'mercadopago',bal:s.bal_mercadopago},
-            {k:'efectivo',bal:s.bal_efectivo},
-          ].filter(c=>c.bal>0)
-          const tarjetas=[
-            {k:'falabella_tc',lim:s.lim_falabella_tc,usado:expenses.filter(e=>inMonth(e.date,month)&&normInst(e.type||e.instrument)==='falabella_tc').reduce((a,e)=>a+e.amount,0)},
-            {k:'santander_tc',lim:s.lim_santander_tc,usado:expenses.filter(e=>inMonth(e.date,month)&&normInst(e.type||e.instrument)==='santander_tc').reduce((a,e)=>a+e.amount,0)},
-          ].filter(c=>c.lim>0)
-          if(!cuentas.length&&!tarjetas.length) return null
-          return html`
-            <div class="card" style="margin-top:10px">
-              <div class="slabel" style="margin-top:0">🏦 Fondos y tarjetas</div>
-              ${cuentas.length>0&&html`
-                <div style="font-size:11px;font-weight:700;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Cuentas</div>
-                ${cuentas.map(({k,bal})=>html`
-                  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--sep)">
-                    <div style="font-weight:600;font-size:14px">${INST[k].label}</div>
-                    <div style="font-weight:800;font-size:15px;color:${INST[k].color}">${clp(bal)}</div>
-                  </div>`)}`}
-              ${tarjetas.length>0&&html`
-                <div style="font-size:11px;font-weight:700;color:var(--t3);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.5px">Tarjetas de crédito</div>
-                ${tarjetas.map(({k,lim,usado})=>{const disp=lim-usado;const pp=Math.min(100,Math.round(usado/lim*100));return html`
-                  <div style="padding:8px 0;border-bottom:1px solid var(--sep)">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                      <div style="font-weight:600;font-size:14px">${INST[k].label}</div>
-                      <div style="font-size:13px;color:var(--t3)">Disp: <b style="color:${disp<0?'var(--r)':INST[k].color}">${clp(disp)}</b></div>
-                    </div>
-                    <div style="height:5px;background:var(--c2);border-radius:3px;overflow:hidden">
-                      <div style="height:100%;width:${pp}%;background:${INST[k].color};border-radius:3px"></div>
-                    </div>
-                    <div style="font-size:11px;color:var(--t3);margin-top:3px">${clp(usado)} usado de ${clp(lim)}</div>
-                  </div>`})`}
-            </div>`
-        })()}
+        <${FondosTarjetas} settings=${state.settings} expenses=${expenses} month=${month}/>
         ${goals.length>0&&(()=>{const totalAh=goals.reduce((s,g)=>s+g.currentAmount,0);const totalObj=goals.reduce((s,g)=>s+g.targetAmount,0);return html`
           <div class="card" style="margin-top:10px;background:linear-gradient(135deg,#34C759,#30D158);color:#fff">
             <div style="display:flex;justify-content:space-between;align-items:center">
