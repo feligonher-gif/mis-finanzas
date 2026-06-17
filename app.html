@@ -484,7 +484,7 @@ function Dashboard() {
                       <div style="height:100%;width:${pp}%;background:${INST[k].color};border-radius:3px"></div>
                     </div>
                     <div style="font-size:11px;color:var(--t3);margin-top:3px">${clp(usado)} usado de ${clp(lim)}</div>
-                  </div>`})}
+                  </div>`})`}
             </div>`
         })()}
         ${goals.length>0&&(()=>{const totalAh=goals.reduce((s,g)=>s+g.currentAmount,0);const totalObj=goals.reduce((s,g)=>s+g.targetAmount,0);return html`
