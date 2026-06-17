@@ -531,7 +531,7 @@ function Dashboard() {
           </div>`}
         <div class="slabel">Acceso rápido</div>
         <div class="grid3">
-          ${[['✅','Checklist\nmensual','checklist'],['🤔','¿Puedo\ncomprarlo?','simulador'],['📅','Calendario\nfinanciero','calendario'],['📊','Reportes','reportes'],['🚗','Gastos\nespeciales','especiales'],['📦','Compras\nen cuotas','cuotas'],['⚙️','Configuración','configuracion']].map(([ic,lb,pg])=>html`
+          ${[['🤔','¿Puedo\ncomprarlo?','simulador'],['📅','Calendario\nfinanciero','calendario'],['📊','Reportes','reportes'],['🚗','Gastos\nespeciales','especiales'],['📦','Compras\nen cuotas','cuotas'],['⚙️','Configuración','configuracion']].map(([ic,lb,pg])=>html`
             <button class="card" style="text-align:center;cursor:pointer;border:none;width:100%;padding:12px 6px" onClick=${()=>dispatch({type:'SUB',p:pg})}>
               <div style="font-size:26px">${ic}</div>
               <div style="font-size:11px;font-weight:600;color:var(--t);margin-top:5px;white-space:pre-line;line-height:1.3">${lb}</div>
@@ -594,8 +594,15 @@ function Ingresos() {
   const {state,dispatch} = useApp()
   const [open,setOpen] = useState(false)
   const [editing,setEdit] = useState(null)
-  const items = useMemo(()=>state.incomes.filter(i=>inMonth(i.date,state.month)).sort((a,b)=>b.date.localeCompare(a.date)),[state.incomes,state.month])
+  const cm = state.month
+  const items = useMemo(()=>state.incomes.filter(i=>inMonth(i.date,cm)).sort((a,b)=>b.date.localeCompare(a.date)),[state.incomes,cm])
   const total = useMemo(()=>items.reduce((s,i)=>s+i.amount,0),[items])
+  const checks = useMemo(()=>{const m={};state.checks.filter(c=>c.month===cm).forEach(c=>{m[c.refItemId]=c.checked});return m},[state.checks,cm])
+  async function toggleCheck(id){
+    const ex=state.checks.find(c=>c.month===cm&&c.refItemId===id)
+    if(ex){const u={...ex,checked:!ex.checked};await DB.put('checks',u);dispatch({type:'UPD_CHK',p:u})}
+    else{const r={id:uid(),month:cm,refItemId:id,checked:true,createdAt:new Date().toISOString()};await DB.put('checks',r);dispatch({type:'ADD_CHK',p:r})}
+  }
   async function save(item){
     const list=Array.isArray(item)?item:[item]
     for(const it of list){await DB.put('incomes',it);dispatch({type:editing&&!Array.isArray(item)?'UPD_I':'ADD_I',p:it})}
@@ -609,22 +616,22 @@ function Ingresos() {
         <button class="btn bg bsm" onClick=${()=>{setEdit(null);setOpen(true)}}>+ Agregar</button>
       </div>
       <div class="page">
-        <${MonthNav} value=${state.month} onChange=${m=>dispatch({type:'MONTH',p:m})}/>
+        <${MonthNav} value=${cm} onChange=${m=>dispatch({type:'MONTH',p:m})}/>
         ${items.length===0?html`
           <div class="empty"><div style="font-size:48px">💰</div><b style="font-size:18px">Sin ingresos este mes</b>
             <span style="color:var(--t3)">Agrega tus ingresos para llevar el control</span>
             <button class="btn bg" onClick=${()=>setOpen(true)}>+ Agregar ingreso</button>
           </div>`:html`
           <div class="card" style="margin-top:12px">
-            ${items.map(i=>html`
-              <div class="li" onClick=${()=>{setEdit(i);setOpen(true)}}>
-                <div class="lic" style="background:var(--gl)">${ILABELS[i.category]?.split(' ')[0]??'💵'}</div>
-                <div class="lcd"><div class="ltt">${i.description}</div><div class="lsb">${ILABELS[i.category]?.replace(/^.\s/,'')} · ${fdate(i.date)}</div></div>
+            ${items.map(i=>{const done=!!checks[i.id];return html`
+              <div class="li" style="opacity:${done?.7:1}" onClick=${()=>{setEdit(i);setOpen(true)}}>
+                <button class="btn bico" style="width:32px;height:32px;font-size:14px;flex-shrink:0;border-radius:50%;border:2px solid ${done?'var(--g)':'var(--sep)'};background:${done?'var(--gl)':'transparent'};color:var(--g)" onClick=${e=>{e.stopPropagation();toggleCheck(i.id)}}>${done?'✓':''}</button>
+                <div class="lcd"><div class="ltt" style="${done?'text-decoration:line-through;color:var(--t3)':''}">${i.description}</div><div class="lsb">${ILABELS[i.category]?.replace(/^.\s/,'')} · ${fdate(i.date)}</div></div>
                 <div style="display:flex;align-items:center;gap:6px">
                   <span class="lam pos">${clp(i.amount)}</span>
                   <button class="btn bico" style="width:32px;height:32px;font-size:13px;background:var(--rl);color:var(--r)" onClick=${e=>{e.stopPropagation();del(i.id)}}>🗑</button>
                 </div>
-              </div>`)}
+              </div>`})}
           </div>`}
       </div>
       <${Modal} open=${open} onClose=${()=>{setOpen(false);setEdit(null)}} title=${editing?'Editar ingreso':'Nuevo ingreso'}>
@@ -730,8 +737,15 @@ function Gastos() {
   const [editing,setEdit] = useState(null)
   const [filt,setFilt] = useState('todos')
   const [showDebts,setShowDebts] = useState(true)
-  const items = useMemo(()=>state.expenses.filter(e=>inMonth(e.date,state.month)).sort((a,b)=>b.date.localeCompare(a.date)),[state.expenses,state.month])
+  const cm = state.month
+  const items = useMemo(()=>state.expenses.filter(e=>inMonth(e.date,cm)).sort((a,b)=>b.date.localeCompare(a.date)),[state.expenses,cm])
   const shown = useMemo(()=>filt==='todos'?items:items.filter(e=>normInst(e.type||e.instrument)===filt),[items,filt])
+  const checks = useMemo(()=>{const m={};state.checks.filter(c=>c.month===cm).forEach(c=>{m[c.refItemId]=c.checked});return m},[state.checks,cm])
+  async function toggleCheck(id){
+    const ex=state.checks.find(c=>c.month===cm&&c.refItemId===id)
+    if(ex){const u={...ex,checked:!ex.checked};await DB.put('checks',u);dispatch({type:'UPD_CHK',p:u})}
+    else{const r={id:uid(),month:cm,refItemId:id,checked:true,createdAt:new Date().toISOString()};await DB.put('checks',r);dispatch({type:'ADD_CHK',p:r})}
+  }
   const totalExp = useMemo(()=>items.reduce((s,e)=>s+e.amount,0),[items])
   const totalDeudas = useMemo(()=>state.debts.reduce((s,d)=>s+d.monthlyPayment,0),[state.debts])
   const total = totalExp + (showDebts?totalDeudas:0)
@@ -782,18 +796,18 @@ function Gastos() {
             <button class="btn br" onClick=${()=>setOpen(true)}>+ Registrar gasto</button>
           </div>`:html`
           <div class="card" style="margin-top:12px">
-            ${shown.map(e=>html`
-              <div class="li" onClick=${()=>{setEdit(e);setOpen(true)}}>
-                <div class="lic" style="background:var(--rl)">${ELABELS[e.category]?.split(' ')[0]}</div>
+            ${shown.map(e=>{const done=!!checks[e.id];return html`
+              <div class="li" style="opacity:${done?.7:1}" onClick=${()=>{setEdit(e);setOpen(true)}}>
+                <button class="btn bico" style="width:32px;height:32px;font-size:14px;flex-shrink:0;border-radius:50%;border:2px solid ${done?'#34C759':'var(--sep)'};background:${done?'#34C75918':'transparent'};color:#34C759" onClick=${ev=>{ev.stopPropagation();toggleCheck(e.id)}}>${done?'✓':''}</button>
                 <div class="lcd">
-                  <div class="ltt">${e.description}</div>
+                  <div class="ltt" style="${done?'text-decoration:line-through;color:var(--t3)':''}">${e.description}</div>
                   <div class="lsb">${ELABELS[e.category]?.replace(/^.\s/,'')} · ${fdate(e.date)} <span class="badge" style="font-size:10px;padding:1px 5px;background:${INST[normInst(e.type||e.instrument)]?.color??'var(--a)'}22;color:${INST[normInst(e.type||e.instrument)]?.color??'var(--a)'}">${INST[normInst(e.type||e.instrument)]?.label??e.type}</span></div>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px">
                   <span class="lam neg">${clp(e.amount)}</span>
                   <button class="btn bico" style="width:32px;height:32px;font-size:13px;background:var(--rl);color:var(--r)" onClick=${ev=>{ev.stopPropagation();del(e.id)}}>🗑</button>
                 </div>
-              </div>`)}
+              </div>`})}
           </div>`}
         ${state.debts.length>0&&html`
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
@@ -861,10 +875,11 @@ function Metas() {
   const [fundsAmt,setFA] = useState('')
   async function save(g){await DB.put('goals',g);dispatch({type:editing?'UPD_G':'ADD_G',p:g});setOpen(false);setEdit(null)}
   async function del(id){if(!confirm('¿Eliminar meta?'))return;await DB.del('goals',id);dispatch({type:'DEL_G',p:id})}
-  async function addF(g,amt){
+  const [fundsInst,setFI] = useState('santander_cc')
+  async function addF(g,amt,inst){
     const u={...g,currentAmount:Math.min(g.currentAmount+amt,g.targetAmount)};
     await DB.put('goals',u);dispatch({type:'UPD_G',p:u});
-    const exp={id:uid(),category:'metas',amount:amt,description:`Aporte ${g.icon} ${g.name}`,date:todayISO(),createdAt:new Date().toISOString()};
+    const exp={id:uid(),category:'metas',instrument:inst,type:inst,amount:amt,description:`Aporte ${g.icon} ${g.name}`,date:todayISO(),createdAt:new Date().toISOString()};
     await DB.put('expenses',exp);dispatch({type:'ADD_E',p:exp});
   }
   return html`
@@ -920,8 +935,14 @@ function Metas() {
       <${Modal} open=${!!addFunds} onClose=${()=>setAF(null)} title="Agregar fondos">
         ${addFunds&&html`
           <div style="text-align:center;margin-bottom:16px"><div style="font-size:48px">${addFunds.icon}</div><b style="font-size:18px">${addFunds.name}</b><br/><span style="color:var(--t3)">${clp(addFunds.currentAmount)} de ${clp(addFunds.targetAmount)}</span></div>
+          <div class="fg"><label class="fl">Se descuenta de</label>
+            <div style="display:flex;gap:8px;margin-top:4px">
+              ${['santander_cc','mercadopago','efectivo'].map(k=>html`
+                <button onClick=${()=>setFI(k)} style="flex:1;padding:8px 4px;border-radius:10px;border:2px solid ${fundsInst===k?INST[k].color:'var(--sep)'};background:${fundsInst===k?INST[k].color+'18':'var(--s)'};cursor:pointer;font-size:11px;font-weight:700;color:${fundsInst===k?INST[k].color:'var(--t)'};text-align:center">${INST[k].label}</button>`)}
+            </div>
+          </div>
           <div class="fg"><label class="fl">Monto a agregar</label><div class="awrap"><span class="apfx">$</span><input class="inp ainp" type="number" inputmode="numeric" placeholder="0" value=${fundsAmt} onInput=${e=>setFA(e.target.value)}/></div></div>
-          <button class="btn bg bfull" onClick=${()=>{const a=parseFloat(fundsAmt)||0;if(a>0){addF(addFunds,a);setAF(null)}}}>💰 Agregar fondos</button>`}
+          <button class="btn bg bfull" onClick=${()=>{const a=parseFloat(fundsAmt)||0;if(a>0){addF(addFunds,a,fundsInst);setAF(null)}}}>💰 Agregar fondos</button>`}
       </${Modal}>
     </div>`
 }
@@ -1673,7 +1694,9 @@ function Calendario() {
 // ── Reportes ──────────────────────────────────────────────────────────────────
 function Reportes() {
   const {state,dispatch} = useApp()
-  const m12=useMemo(()=>{const ms=[];const n=new Date();for(let i=0;i<12;i++){const d=new Date(n.getFullYear(),n.getMonth()+i,1);ms.push(`${d.getFullYear()}-${s2(d.getMonth()+1)}`)}return ms},[])
+  // 12 pasados + mes actual + 11 futuros = 24 meses
+  const m24=useMemo(()=>{const ms=[];const n=new Date();for(let i=-12;i<12;i++){const d=new Date(n.getFullYear(),n.getMonth()+i,1);ms.push(`${d.getFullYear()}-${s2(d.getMonth()+1)}`)}return ms},[])
+  const m12=useMemo(()=>m24.slice(12),[m24])
   const md12=useMemo(()=>state.debts.reduce((s,d)=>s+d.monthlyPayment,0),[state.debts])
   const mi2_12=useMemo(()=>state.installments.filter(i=>i.paidInstallments<i.numInstallments).reduce((s,i)=>s+i.monthlyAmount,0),[state.installments])
   const [selM,setSelM] = useState(m12[0])
@@ -1696,6 +1719,46 @@ function Reportes() {
     ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:10},color:tc,boxWidth:10}}},scales:{x:{grid:{display:false},ticks:{color:tc,font:{size:10}}},y:{grid:{color:'rgba(128,128,128,.1)'},ticks:{color:tc,font:{size:10},callback:v=>`$${Number(v).toLocaleString('es-CL')}`}}}}})
     return()=>lineC.current?.destroy()
   },[data,m12])
+  const data24=useMemo(()=>{
+    let acum=0
+    return m24.map(m=>{
+      const ing=state.incomes.filter(i=>inMonth(i.date,m)).reduce((s,i)=>s+i.amount,0)
+      const gst=state.expenses.filter(e=>inMonth(e.date,m)).reduce((s,e)=>s+e.amount,0)
+      const byInst=Object.fromEntries(Object.keys(INST).map(k=>[k,0]))
+      state.expenses.filter(e=>inMonth(e.date,m)).forEach(e=>{const t=normInst(e.type||e.instrument);if(byInst[t]!==undefined)byInst[t]+=e.amount})
+      const saldo=ing-gst-md12-mi2_12
+      acum+=saldo
+      return {month:m,ing,gst,byInst,deudas:md12,cuotas:mi2_12,saldo,acum}
+    })
+  },[m24,state.incomes,state.expenses,md12,mi2_12])
+
+  function exportXLSX(){
+    if(typeof XLSX==='undefined'){alert('Librería no disponible');return}
+    const hdr=['Mes','Ingresos','Gastos totales','Santander CC','Mercado Pago','Efectivo','Falabella TC','Santander TC','Deudas','Cuotas','Saldo del mes','Saldo acumulado','Tipo']
+    const rows=data24.map(d=>{
+      const now=curMonth()
+      const tipo=d.month<now?'Histórico':d.month===now?'Actual':'Proyectado'
+      return [fmonth(d.month),d.ing,d.gst,d.byInst.santander_cc,d.byInst.mercadopago,d.byInst.efectivo,d.byInst.falabella_tc,d.byInst.santander_tc,d.deudas,d.cuotas,d.saldo,d.acum,tipo]
+    })
+    const ws=XLSX.utils.aoa_to_sheet([hdr,...rows])
+    // ancho de columnas
+    ws['!cols']=[{wch:18},{wch:14},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:14},{wch:12},{wch:12},{wch:14},{wch:16},{wch:12}]
+    const wb=XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb,ws,'Resumen 24 meses')
+    // hoja de detalle por instrumento
+    const hdr2=['Mes','Instrumento','Monto']
+    const rows2=[]
+    data24.forEach(d=>{
+      Object.entries(INST).forEach(([k,v])=>{
+        if(d.byInst[k]>0) rows2.push([fmonth(d.month),v.label,d.byInst[k]])
+      })
+    })
+    const ws2=XLSX.utils.aoa_to_sheet([hdr2,...rows2])
+    ws2['!cols']=[{wch:18},{wch:16},{wch:14}]
+    XLSX.utils.book_append_sheet(wb,ws2,'Detalle por instrumento')
+    XLSX.writeFile(wb,`mis-finanzas-24meses-${todayISO()}.xlsx`)
+  }
+
   function exportCSV(){
     const rows=[['Mes','Ingresos','Gastos+Deudas','Ahorro proyectado'],...data.map(d=>[fmonth(d.month),d.income,d.expense,d.income-d.expense])]
     const csv=rows.map(r=>r.join(',')).join('\n')
@@ -1709,6 +1772,14 @@ function Reportes() {
         <button class="btn bs bsm" onClick=${exportCSV}>⬇ CSV</button>
       </div>
       <div class="page">
+        <div class="card" style="margin-bottom:10px">
+          <div class="slabel" style="margin-top:0">📥 Exportar datos duros — 24 meses</div>
+          <div style="font-size:13px;color:var(--t3);margin-bottom:10px">12 meses anteriores + 12 meses siguientes con detalle por instrumento de pago</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn bg bfull" onClick=${exportXLSX}>📊 Exportar Excel (.xlsx)</button>
+            <button class="btn bs bfull" onClick=${exportCSV}>📄 CSV simple</button>
+          </div>
+        </div>
         <div class="card"><div class="slabel" style="margin-top:0">Proyección 12 meses</div><div class="chart-w" style="height:220px"><canvas ref=${lineRef}></canvas></div></div>
         <div class="card" style="margin-top:10px">
           <div class="slabel" style="margin-top:0">Resumen por mes</div>
@@ -1959,7 +2030,6 @@ function Transferencias() {
 function Mas() {
   const {dispatch} = useApp()
   const MENU=[
-    {ic:'✅',lb:'Checklist mensual',sub:'Ingresos y gastos del mes',pg:'checklist',c:'#34C759'},
     {ic:'🔄',lb:'Transferencias',sub:'Mover dinero entre cuentas y tarjetas',pg:'transferencias',c:'#5856D6'},
     {ic:'🤔',lb:'¿Puedo comprarlo?',sub:'Simulador de compras',pg:'simulador',c:'#007AFF'},
     {ic:'🏦',lb:'Estado de cuenta',sub:'Importar cartola o estado de tarjeta',pg:'estadocuenta',c:'#34C759'},
