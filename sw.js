@@ -1,13 +1,14 @@
-const CACHE = 'misfinanzas-v6'
+const CACHE = 'misfinanzas-v7'
+const BASE = new URL('./', self.location).href
 const FILES = [
-  '/',
-  '/app.html',
-  '/manifest.json',
-  '/lib/preact.js',
-  '/lib/preact-hooks.js',
-  '/lib/htm.js',
-  '/lib/chart-umd.js',
-  '/lib/xlsx.min.js'
+  BASE,
+  BASE + 'app.html',
+  BASE + 'manifest.json',
+  BASE + 'lib/preact.js',
+  BASE + 'lib/preact-hooks.js',
+  BASE + 'lib/htm.js',
+  BASE + 'lib/chart-umd.js',
+  BASE + 'lib/xlsx.min.js'
 ]
 
 self.addEventListener('install', e => {
@@ -29,14 +30,16 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   e.respondWith(
     caches.match(e.request).then(cached => {
-      if (cached) return cached
-      return fetch(e.request).then(res => {
+      const fetchFresh = fetch(e.request).then(res => {
         if (res.ok) {
           const clone = res.clone()
           caches.open(CACHE).then(c => c.put(e.request, clone))
         }
         return res
       }).catch(() => cached || new Response('Offline', {status: 503}))
+      // network-first para HTML, cache-first para assets
+      if (e.request.destination === 'document') return fetchFresh
+      return cached || fetchFresh
     })
   )
 })
